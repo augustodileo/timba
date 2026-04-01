@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+    paths-ignore:
+      - '*.md'
+      - 'LICENSE'
+      - 'docs/**'
+  pull_request:
+  workflow_call:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ── Lint + SAST ──────────────────────────────────────────────
+  lint:
+    name: Lint & Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Check for leaked secrets
+        run: .github/hooks/pre-commit all
+
+      - name: Lint (ruff)
+        run: uv run ruff check src/ tests/
+
+      - name: SAST (bandit)
+        run: uv run bandit -r src/timba/ -c pyproject.toml -q
+
+      - name: Audit dependencies
+        run: uv run pip-audit
+
+  # ── Unit tests ───────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Run tests
+        run: make test
+
+  # ── Docker build + smoke test + image scan ───────────────────
+  docker:
+    name: Docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Build Docker image
+        run: |
+          VERSION=$(git describe --tags --always 2>/dev/null || echo 0.0.0.dev0)
+          docker build --build-arg VERSION=$VERSION -t timba:ci .
+
+      - name: Smoke test
+        run: docker run --rm timba:ci --version
+
+      - name: Container structure test
+        run: |
+          docker run --rm --entrypoint "" timba:ci sh -c '
+            test -f /app/timba &&
+            test -f /app/config.yaml &&
+            whoami | grep -q bot &&
+            echo "Structure tests passed"
+          '
+
+      - name: Scan image for CVEs (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: timba:ci
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH

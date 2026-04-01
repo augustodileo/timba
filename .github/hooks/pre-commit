@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Pre-commit hook: block commits with real private keys or wallet addresses.
+# Install: ln -sf ../../.github/hooks/pre-commit .git/hooks/pre-commit
+#
+# Also called by CI with "all" arg to scan all tracked files:
+#   .github/hooks/pre-commit all
+#
+# Allowed dummy values (hardhat, test, contracts):
+#   0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+#   0xDeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF
+#   0x0000000000000000000000000000000000000000...
+#   0x4D97DCd97eC945f40cF65F87097ACe5EA0476045 (Polymarket CTF contract)
+#   0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174 (USDC-E contract)
+
+ALLOWED="ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80\|DeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF\|0000000000000000000000000000000000000000\|4D97DCd97eC945f40cF65F87097ACe5EA0476045\|2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+
+FILES="${1:-staged}"
+if [ "$FILES" = "staged" ]; then
+    MATCHES=$(git diff --cached --diff-filter=ACMR -U0 -- '*.py' '*.yaml' '*.yml' '*.json' '*.md' '*.sh' 2>/dev/null \
+        | grep "^+" | grep -i "0x[a-fA-F0-9]\{40,\}" | grep -iv "$ALLOWED" || true)
+else
+    MATCHES=$(grep -rn "0x[a-fA-F0-9]\{40,\}" src/ tests/ config.yaml .github/ \
+        --include="*.py" --include="*.yaml" --include="*.yml" --include="*.sh" 2>/dev/null \
+        | grep -iv "$ALLOWED" || true)
+fi
+
+if [ -n "$MATCHES" ]; then
+    echo "ERROR: Potential secret detected!"
+    echo "$MATCHES"
+    echo ""
+    echo "If this is a legitimate public address (contract, etc), add it to ALLOWED in .github/hooks/pre-commit"
+    exit 1
+fi
+
+echo "No secrets found."
+exit 0

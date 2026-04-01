@@ -1,0 +1,47 @@
+# Base JSON Schema for config.yaml — global fields and shared definitions.
+#
+# Strategy sections (favorite, ...) are injected dynamically
+# by schema.py from each strategy's config_schema() method.
+# To add validation for a new strategy, implement config_schema() in your
+# Strategy subclass — no need to edit this file.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: "BTC Bot Configuration"
+type: object
+# NOTE: additionalProperties is set to false by schema.py after injecting
+# discovered strategy properties.
+
+properties:
+  log_level:
+    type: string
+    description: "Python logging level"
+    enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL, debug, info, warning, error, critical]
+
+  polymarket:
+    type: object
+    description: "Polymarket API settings"
+    additionalProperties: true
+    properties:
+      max_workers:
+        type: integer
+        description: "Parallel CLOB requests for market cache polling"
+        minimum: 1
+        maximum: 50
+        default: 10
+
+# ── Shared definitions (used by schema.py when building strategy schemas) ──
+$defs:
+  coin:
+    type: string
+    description: "Cryptocurrency ticker"
+    enum: [btc, eth, sol, xrp, bnb, doge, hype]
+
+  interval:
+    type: string
+    description: "Market interval"
+    enum: ["5m", "15m", "1h", "4h"]
+
+  mode:
+    type: string
+    description: "Trading mode — use quoted 'off' in YAML (unquoted parses as boolean)"
+    enum: [paper, live, "off"]

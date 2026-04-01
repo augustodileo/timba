@@ -1,0 +1,74 @@
+[project]
+name = "timba"
+dynamic = ["version"]
+description = "Automated trading bot for Polymarket's crypto Up/Down binary markets"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [{name = "Augusto Di Leo"}]
+urls = {Homepage = "https://github.com/augustodileo/timba", Repository = "https://github.com/augustodileo/timba", Issues = "https://github.com/augustodileo/timba/issues"}
+dependencies = [
+    "polymarket-apis>=0.5.3,<0.6",
+    "py-builder-relayer-client>=0.0.1,<0.1",
+    "py-builder-signing-sdk>=0.0.2,<0.1",
+    "jsonschema>=4.20",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "pyfiglet>=1.0",
+    "rich>=14.3.3",
+    "web3>=7.0,<8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-mock>=3.12",
+    "pip-audit>=2.7",
+    "ruff>=0.11",
+    "bandit>=1.8",
+]
+
+[project.scripts]
+timba = "timba.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=timba --cov-report=term-missing"
+markers = [
+    "live: tests that hit the real Polymarket CLOB API (need POLYMARKET_PRIVATE_KEY)",
+]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/timba/_version.py"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["F", "I"]  # pyflakes (unused imports, undefined names) + isort
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = [
+    "B101",  # assert is fine
+    "B110",  # try/except/pass — used for resilient cleanup (db conn close, file write)
+    "B112",  # try/except/continue — used for resilient DB reads across multiple files
+    "B106",  # hardcoded password false positives (token_id_up="tu", relay dummy creds)
+    "B404",  # subprocess import — used for git describe only
+    "B603",  # subprocess call — git only, no user input
+    "B607",  # partial path — "git" binary
+    "B310",  # urllib.urlopen — only hits localhost API (127.0.0.1)
+    "B311",  # random for jitter — not crypto, just backoff timing
+    "B608",  # SQL f-strings — table names validated, params are parameterized
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/timba"]

@@ -1,0 +1,128 @@
+# ── Timba — Default Configuration ────────────────────────────
+#
+# Validated against JSON Schema on every load.
+# Docs: https://github.com/augustodileo/timba
+#
+# coin:     btc, eth, sol, xrp, bnb, doge, hype
+# interval: 5m, 15m, 1h, 4h
+# mode:     paper, live (NOT "on" — YAML parses on as boolean True)
+
+log_level: INFO
+
+# ── Favorite strategy ────────────────────────────────────────
+# Buy the near-certain side (>= min_price) in the last seconds before close.
+favorite:
+  enabled: true
+  min_price: 0.98              # minimum midpoint to bet
+  min_signal_chg: 0.15         # minimum Coinbase signal change % to act
+  contracts_per_trade: 5
+  resolve_delay_sec: 30
+  markets:
+    # 5m: last 15s before close
+    - coin: btc
+      interval: 5m
+      mode: paper
+      entry_window_sec: 15
+      close_window_sec: 2
+    - coin: eth
+      interval: 5m
+      mode: paper
+      entry_window_sec: 15
+      close_window_sec: 2
+    - coin: sol
+      interval: 5m
+      mode: paper
+      entry_window_sec: 15
+      close_window_sec: 2
+    - coin: xrp
+      interval: 5m
+      mode: paper
+      entry_window_sec: 15
+      close_window_sec: 2
+    - coin: bnb
+      interval: 5m
+      mode: paper
+      entry_window_sec: 15
+      close_window_sec: 2
+    - coin: doge
+      interval: 5m
+      mode: paper
+      entry_window_sec: 15
+      close_window_sec: 2
+    - coin: hype
+      interval: 5m
+      mode: paper
+      entry_window_sec: 15
+      close_window_sec: 2
+    # 15m: last 30s
+    - coin: btc
+      interval: 15m
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: eth
+      interval: 15m
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: sol
+      interval: 15m
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: xrp
+      interval: 15m
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: bnb
+      interval: 15m
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: doge
+      interval: 15m
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: hype
+      interval: 15m
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    # 1h: last 30s
+    - coin: btc
+      interval: 1h
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: eth
+      interval: 1h
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: sol
+      interval: 1h
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: xrp
+      interval: 1h
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: bnb
+      interval: 1h
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: doge
+      interval: 1h
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2
+    - coin: hype
+      interval: 1h
+      mode: paper
+      entry_window_sec: 30
+      close_window_sec: 2

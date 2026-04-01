@@ -1,0 +1,12 @@
+data/
+__pycache__/
+*.pyc
+.git/
+.github/
+tests/
+terraform/
+web/
+*.bak
+.claude/
+.venv/
+node_modules/
