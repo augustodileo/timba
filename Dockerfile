@@ -18,12 +18,12 @@ ENV SETUPTOOLS_SCM_PRETEND_VERSION=$VERSION
 RUN uv sync --all-extras -q
 RUN scripts/build.sh
 
-# Stage 2: Minimal runtime image (same glibc as builder)
-FROM python:3.12-slim
+# Stage 2: Minimal runtime (no Python needed — PyInstaller binary is self-contained)
+FROM debian:trixie-slim
 
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
-RUN adduser --disabled-password --no-create-home --gecos "" bot
+RUN useradd --no-create-home --shell /bin/false bot
 
 WORKDIR /app
 COPY --from=builder /build/dist/timba /app/timba
