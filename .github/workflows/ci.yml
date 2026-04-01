@@ -78,4 +78,4 @@ jobs:
           image: ${{ steps.image.outputs.ref }}
           exit-code: 1
           failure-threshold: WARN
-          accept-keys: DKL-DI-0005
+          accept-keywords: DKL-DI-0005
