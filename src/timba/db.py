@@ -359,7 +359,10 @@ def _writer_loop():
     conn = _open_writer_conn()
     BATCH_SIZE = 100
 
-    while _writer_running or not _write_queue.empty():
+    # Capture queue ref so teardown (reset()) setting _write_queue=None doesn't crash us
+    q = _write_queue
+
+    while _writer_running or (q is not None and not q.empty()):
         # Check for rotation signal (when idle or between batches)
         if _rotation_event.is_set():
             conn.close()
@@ -367,18 +370,18 @@ def _writer_loop():
             _rotation_event.clear()
 
         try:
-            item = _write_queue.get(timeout=0.5)
+            item = q.get(timeout=0.5)
         except queue.Empty:
             continue
 
         if item is None:
-            _write_queue.task_done()
+            q.task_done()
             break  # shutdown signal
 
         batch = [item]
         while len(batch) < BATCH_SIZE:
             try:
-                item = _write_queue.get_nowait()
+                item = q.get_nowait()
                 if item is None:
                     break
                 batch.append(item)
@@ -408,7 +411,7 @@ def _writer_loop():
                         pass
         finally:
             for _ in batch:
-                _write_queue.task_done()
+                q.task_done()
 
     conn.close()
 
