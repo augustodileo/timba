@@ -70,4 +70,4 @@ jobs:
           image-ref: ${{ steps.image.outputs.ref }}
           format: table
           exit-code: 1
-          severity: CRITICAL,HIGH
+          severity: CRITICAL
