@@ -20,7 +20,8 @@ RUN scripts/build.sh
 # Stage 2: Minimal runtime image (same glibc as builder)
 FROM python:3.12-slim
 
-RUN apt-get update -qq && apt-get install -y -qq curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 RUN adduser --disabled-password --no-create-home --gecos "" bot
 
 WORKDIR /app
