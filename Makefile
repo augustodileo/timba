@@ -15,7 +15,10 @@
 REGISTRY := $(shell git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$$||' | xargs -I{} echo "ghcr.io/{}")
 
 # Version from hatch-vcs (the single source of truth).
+# _version: full PEP 440 (e.g. 0.1.dev3+gd965203) — used for package metadata.
+# _docker_tag: sanitized for Docker (replaces + with .) since Docker tags can't have +.
 _version = $(shell uv run python -c "from timba._version import __version__; print(__version__)" 2>/dev/null || echo dev)
+_docker_tag = $(subst +,.,$(_version))
 
 .PHONY: all sync lint audit test build install docker docker-image docker-test package clean
 
@@ -65,16 +68,16 @@ install: build
 # ── Docker ────────────────────────────────────────────────────
 
 docker-image:
-	@echo "$(REGISTRY):$(_version)"
+	@echo "$(REGISTRY):$(_docker_tag)"
 
 docker: sync
-	docker build --build-arg VERSION=$(_version) -t $(REGISTRY):$(_version) .
+	docker build --build-arg VERSION=$(_version) -t $(REGISTRY):$(_docker_tag) .
 	@echo ""
-	@echo "Built: $(REGISTRY):$(_version)"
+	@echo "Built: $(REGISTRY):$(_docker_tag)"
 
 docker-test: sync
-	docker run --rm $(REGISTRY):$(_version) --version
-	docker run --rm --entrypoint "" $(REGISTRY):$(_version) sh -c '\
+	docker run --rm $(REGISTRY):$(_docker_tag) --version
+	docker run --rm --entrypoint "" $(REGISTRY):$(_docker_tag) sh -c '\
 		test -f /app/timba && \
 		test -f /app/config.yaml && \
 		whoami | grep -q bot && \
