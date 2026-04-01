@@ -77,7 +77,9 @@ if [ -z "${VERSION:-}" ]; then
     fi
 fi
 
-ARCHIVE="timba-${VERSION}-${TARGET}.tar.gz"
+# Archive uses PEP 440 version (no v prefix), tag keeps the v prefix
+PKG_VERSION="${VERSION#v}"
+ARCHIVE="timba-${PKG_VERSION}-${TARGET}.tar.gz"
 URL="https://github.com/$REPO/releases/download/${VERSION}/${ARCHIVE}"
 
 echo "Installing timba $VERSION ($TARGET)..."
