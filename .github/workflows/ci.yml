@@ -15,38 +15,34 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # ── Lint + SAST ──────────────────────────────────────────────
   lint:
     name: Lint & Security
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: uv sync --all-extras
-
       - name: Check for leaked secrets
         run: .github/hooks/pre-commit all
 
-      - name: Lint (ruff)
-        run: uv run ruff check src/ tests/
-
-      - name: SAST (bandit)
-        run: uv run bandit -r src/timba/ -c pyproject.toml -q
+      - name: Lint + SAST
+        run: make lint
 
       - name: Audit dependencies
-        run: uv run pip-audit
+        run: uv run pip-audit --skip-editable
 
-  # ── Unit tests ───────────────────────────────────────────────
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -55,7 +51,6 @@ jobs:
       - name: Run tests
         run: make test
 
-  # ── Docker build + smoke test + image scan ───────────────────
   docker:
     name: Docker
     runs-on: ubuntu-latest
@@ -64,10 +59,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
       - name: Build Docker image
-        run: |
-          VERSION=$(git describe --tags --always 2>/dev/null || echo 0.0.0.dev0)
-          docker build --build-arg VERSION=$VERSION -t timba:ci .
+        run: make docker
 
       - name: Smoke test
         run: docker run --rm timba:ci --version

@@ -9,11 +9,10 @@
 #   make package      build + tar.gz for release (CI uses this)
 #   make clean        remove build artifacts
 
-VERSION := $(shell git describe --tags --always 2>/dev/null || echo 0.0.0.dev0)
 REGISTRY := $(shell git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$$||' | xargs -I{} echo "ghcr.io/{}")
-export VERSION
-export SETUPTOOLS_SCM_PRETEND_VERSION := $(VERSION)
 
+# Version from hatch-vcs (the single source of truth).
+# Requires uv sync first, so targets that need it call _version.
 .PHONY: all sync lint test build install docker package clean
 
 all: build
@@ -22,6 +21,10 @@ all: build
 
 sync:
 	@uv sync --all-extras -q
+
+# ── Version (after sync, hatch-vcs has generated _version.py) ─
+
+_version = $(shell uv run python -c "from timba._version import __version__; print(__version__)" 2>/dev/null || echo dev)
 
 # ── Lint ─────────────────────────────────────────────────────
 
@@ -48,26 +51,27 @@ install: build
 	mkdir -p ~/.timba
 	@[ -f ~/.timba/config.yaml ] || cp config.yaml ~/.timba/config.yaml
 	@echo ""
-	@echo "Installed timba $(VERSION)"
+	@echo "Installed timba $(_version)"
 	@echo "  Binary: ~/.local/bin/timba"
 	@echo "  Config: ~/.timba/config.yaml"
 	@echo "  Run:    timba start"
 
 # ── Docker ────────────────────────────────────────────────────
+# Docker has no .git, so we pass the version as a build-arg.
 
-docker:
-	docker build --build-arg VERSION=$(VERSION) -t $(REGISTRY):$(VERSION) .
+docker: sync
+	docker build --build-arg VERSION=$(_version) -t $(REGISTRY):$(_version) -t timba:ci .
 	@echo ""
-	@echo "Built: $(REGISTRY):$(VERSION)"
-	@echo "  Run: docker run -e POLYMARKET_PRIVATE_KEY=0x... -e POLYMARKET_FUNDER=0x... $(REGISTRY):$(VERSION)"
+	@echo "Built: $(REGISTRY):$(_version)"
+	@echo "  Run: docker run -e POLYMARKET_PRIVATE_KEY=0x... -e POLYMARKET_FUNDER=0x... $(REGISTRY):$(_version)"
 
 # ── Package (CI) ──────────────────────────────────────────────
 
 package: build
 	cp config.yaml dist/config.yaml
-	cd dist && tar czf "timba-$(VERSION)-$${TARGET:-local}.tar.gz" timba config.yaml
-	cd dist && shasum -a 256 "timba-$(VERSION)-$${TARGET:-local}.tar.gz" > "timba-$(VERSION)-$${TARGET:-local}.tar.gz.sha256"
-	@echo "Packaged: dist/timba-$(VERSION)-$${TARGET:-local}.tar.gz"
+	cd dist && tar czf "timba-$(_version)-$${TARGET:-local}.tar.gz" timba config.yaml
+	cd dist && shasum -a 256 "timba-$(_version)-$${TARGET:-local}.tar.gz" > "timba-$(_version)-$${TARGET:-local}.tar.gz.sha256"
+	@echo "Packaged: dist/timba-$(_version)-$${TARGET:-local}.tar.gz"
 
 # ── Clean ─────────────────────────────────────────────────────
 
