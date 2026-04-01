@@ -65,6 +65,63 @@ class TestAPIServer:
         finally:
             server.shutdown()
 
+    def test_status_exposes_strategies_from_config(self, tmp_path):
+        import urllib.request
+
+        from timba import db as _db
+        from timba.config import Config, StrategyConfig
+        from timba.state import State
+        _db.init(tmp_path / "data")
+        health = HealthState()
+        health.last_tick = time.time()
+        shutdown_event = threading.Event()
+
+        state = State()
+        config = Config()
+        config.strategies["favorite"] = StrategyConfig({
+            "enabled": True,
+            "markets": [
+                {"coin": "btc", "interval": "5m", "mode": "paper"},
+                {"coin": "eth", "interval": "5m", "mode": "live"},
+            ],
+        })
+
+        server = start_api_server(health, state, shutdown_event, "test", data_dir=tmp_path / "data", config=config, port=18103, bind="127.0.0.1")
+        try:
+            resp = urllib.request.urlopen("http://127.0.0.1:18103/api/status", timeout=5)
+            data = json.loads(resp.read())
+            assert "strategies" in data
+            assert "favorite" in data["strategies"]
+            markets = data["strategies"]["favorite"]["markets"]
+            assert len(markets) == 2
+            assert markets[0]["coin"] == "btc"
+            assert markets[1]["mode"] == "live"
+        finally:
+            server.shutdown()
+
+    def test_status_excludes_disabled_strategies(self, tmp_path):
+        import urllib.request
+
+        from timba import db as _db
+        from timba.config import Config, StrategyConfig
+        from timba.state import State
+        _db.init(tmp_path / "data")
+        health = HealthState()
+        health.last_tick = time.time()
+        shutdown_event = threading.Event()
+
+        state = State()
+        config = Config()
+        config.strategies["favorite"] = StrategyConfig({"enabled": False, "markets": []})
+
+        server = start_api_server(health, state, shutdown_event, "test", config=config, port=18104, bind="127.0.0.1")
+        try:
+            resp = urllib.request.urlopen("http://127.0.0.1:18104/api/status", timeout=5)
+            data = json.loads(resp.read())
+            assert data["strategies"] == {}
+        finally:
+            server.shutdown()
+
     def test_stop_endpoint(self):
         import urllib.request
         health = HealthState()

@@ -14,6 +14,7 @@ class BotAPIHandler(BaseHTTPRequestHandler):
 
     health_state = None
     bot_state = None       # State instance
+    bot_config = None      # Config instance
     shutdown_event = None  # threading.Event
     version = ""
     data_dir = None        # Path to data directory (for trade queries)
@@ -34,9 +35,17 @@ class BotAPIHandler(BaseHTTPRequestHandler):
                     state = self.bot_state.to_dashboard_dict()
                 except Exception:
                     state = {}
+            strategies = {}
+            if self.bot_config:
+                for name, scfg in self.bot_config.strategies.items():
+                    if scfg.enabled:
+                        strategies[name] = {
+                            "markets": scfg.markets,
+                        }
             self._json_response(200, {
                 "health": health,
                 "state": state,
+                "strategies": strategies,
                 "version": self.version,
             })
         elif path == "/api/trades":
@@ -129,7 +138,7 @@ class BotAPIHandler(BaseHTTPRequestHandler):
         pass  # suppress HTTP access logs
 
 
-def start_api_server(health_state, bot_state, shutdown_event, version, data_dir=None, port=8080, bind=""):
+def start_api_server(health_state, bot_state, shutdown_event, version, data_dir=None, config=None, port=8080, bind=""):
     """Start the API server in a background thread.
 
     bind defaults to TIMBA_BIND env var, or 127.0.0.1 if unset.
@@ -139,6 +148,7 @@ def start_api_server(health_state, bot_state, shutdown_event, version, data_dir=
         bind = os.environ.get("TIMBA_BIND", "127.0.0.1")
     BotAPIHandler.health_state = health_state
     BotAPIHandler.bot_state = bot_state
+    BotAPIHandler.bot_config = config
     BotAPIHandler.shutdown_event = shutdown_event
     BotAPIHandler.version = version
     BotAPIHandler.data_dir = data_dir

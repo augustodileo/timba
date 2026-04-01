@@ -476,7 +476,7 @@ def cmd_start(args):
     # Start API server
     port = getattr(args, "port", 8080) or 8080
     from timba.server import start_api_server
-    api_server = start_api_server(trader.health, state, shutdown_event, version, data_dir=data_dir, port=port)
+    api_server = start_api_server(trader.health, state, shutdown_event, version, data_dir=data_dir, config=config, port=port)
 
     # Write bot.json after API server is confirmed listening
     _write_bot_json(port)
@@ -646,8 +646,10 @@ def cmd_monitor(args):
         lines.append(f"Portfolio: ${portfolio:.2f}")
         lines.append(f"Cash:      ${cash:.2f}{pend}")
 
-        # Per-strategy summary (derive strategy names from trades)
-        strategy_names = sorted(set(t.get("strategy", "") for t in trades if t.get("strategy")))
+        # Per-strategy summary (from config, with trade data overlaid)
+        config_strategies = data.get("strategies", {})
+        trade_strategies = set(t.get("strategy", "") for t in trades if t.get("strategy"))
+        strategy_names = sorted(set(config_strategies.keys()) | trade_strategies)
         for sname in strategy_names:
             strades = [t for t in trades if t.get("strategy") == sname]
             type_counts = Counter(t.get("type", "") for t in strades)
@@ -681,33 +683,26 @@ def cmd_monitor(args):
             lines.append("")
             lines.append(f"[bold]{sname.upper()}[/]")
 
-            has_live = w + lo > 0
-            has_paper = pw + pl > 0
-
-            if has_live:
+            if w + lo > 0:
                 lines.append("  [dim]── LIVE ──[/]")
                 color = "green" if live_pnl >= 0 else "red"
                 rate = _pnl_rate([t for t in strades if t.get("type") in ("win", "loss")], live_pnl)
                 lines.append(f"  Bets:   {w}W/{lo}L {w/max(1,w+lo)*100:.0f}% [{color}]${live_pnl:+.3f}[/]{rate}")
 
-            if has_paper:
-                lines.append("  [dim]── PAPER ──[/]")
-                color = "green" if paper_pnl >= 0 else "red"
-                rate = _pnl_rate([t for t in strades if t.get("type", "").startswith("paper")], paper_pnl)
-                lines.append(f"  Bets:   {pw}W/{pl}L {pw/max(1,pw+pl)*100:.0f}% [{color}]${paper_pnl:+.3f}[/]{rate}")
-
-            if fw:
-                pfw = sum(1 for t in strades if t.get("type") == "fail_win")
-                pfl = sum(1 for t in strades if t.get("type") == "fail_loss")
-                lines.append(f"  Fails:  {pfw}W/{pfl}L {pfw/max(1,pfw+pfl)*100:.0f}%")
-            if sw:
-                psw = sum(1 for t in strades if t.get("type") == "skip_win")
-                psl = sum(1 for t in strades if t.get("type") == "skip_loss")
-                pss = type_counts.get("skip_none", 0)
-                skip_line = f"  Skips:  {psw}W/{psl}L {psw/max(1,psw+psl)*100:.0f}%"
-                if pss:
-                    skip_line += f" +{pss}S"
-                lines.append(skip_line)
+            lines.append("  [dim]── PAPER ──[/]")
+            color = "green" if paper_pnl >= 0 else "red"
+            rate = _pnl_rate([t for t in strades if t.get("type", "").startswith("paper")], paper_pnl)
+            lines.append(f"  Bets:   {pw}W/{pl}L [{color}]${paper_pnl:+.3f}[/]{rate}")
+            pfw = sum(1 for t in strades if t.get("type") == "fail_win")
+            pfl = sum(1 for t in strades if t.get("type") == "fail_loss")
+            lines.append(f"  Fails:  {pfw}W/{pfl}L")
+            psw = sum(1 for t in strades if t.get("type") == "skip_win")
+            psl = sum(1 for t in strades if t.get("type") == "skip_loss")
+            pss = type_counts.get("skip_none", 0)
+            skip_line = f"  Skips:  {psw}W/{psl}L"
+            if pss:
+                skip_line += f" +{pss}S"
+            lines.append(skip_line)
 
         # Recent trades
         def _fmt_trade(t):
@@ -723,7 +718,13 @@ def cmd_monitor(args):
             return f"{sn} {r} %-4s %3s %s $%.4f [{color}]%+.3f[/]   %s" % (_coin.upper(), _iv, side, fill, p, ts)
 
         # ── Right panel: per-coin/interval table (build first to measure height) ──
+        # Seed from config so table shows even with zero trades
         coin_iv_trades = {}
+        for scfg in config_strategies.values():
+            for m in scfg.get("markets", []):
+                key = (m.get("coin", ""), m.get("interval", ""))
+                if key[0] and key[1]:
+                    coin_iv_trades.setdefault(key, [])
         for t in trades:
             coin, iv = parse_slug(t.get("slug", ""))
             if coin and iv:
@@ -731,16 +732,36 @@ def cmd_monitor(args):
 
         sorted_keys = sorted(coin_iv_trades.keys(), key=lambda k: (k[0], IV_ORDER.get(k[1], 9)))
 
+        # Build mode lookup from config
+        mode_lookup = {}
+        for scfg in config_strategies.values():
+            for m in scfg.get("markets", []):
+                mode_lookup[(m.get("coin", ""), m.get("interval", ""))] = m.get("mode", "paper")
+
+        # Detect which modes exist from config
+        has_live = any(mode_lookup.get(k) == "live" for k in sorted_keys)
+        has_paper = any(mode_lookup.get(k, "paper") == "paper" for k in sorted_keys)
+
         if sorted_keys:
-            table = Table(title="[bold]FAVORITE[/]", border_style="cyan", show_lines=False, pad_edge=False)
+            strat_title = ", ".join(s.upper() for s in strategy_names) or "TRADES"
+            table = Table(title=f"[bold]{strat_title}[/]", border_style="cyan", show_lines=False, pad_edge=False)
             table.add_column("COIN", style="bold", width=5)
             table.add_column("INT", width=4)
-            table.add_column("Paper Bets", width=11)
-            table.add_column("Paper Fails", width=11)
-            table.add_column("Paper Skips", width=11)
-            table.add_column("Paper PnL", width=11, justify="right")
+            table.add_column("MODE", width=5)
+            if has_live:
+                table.add_column("Live Bets", width=11)
+                table.add_column("Live Fails", width=11)
+                table.add_column("Live Skips", width=11)
+                table.add_column("Live PnL", width=11, justify="right")
+            if has_paper:
+                table.add_column("Paper Bets", width=11)
+                table.add_column("Paper Fails", width=11)
+                table.add_column("Paper Skips", width=11)
+                table.add_column("Paper PnL", width=11, justify="right")
 
-            totals = {"bw": 0, "bl": 0, "fw": 0, "fl": 0, "sw": 0, "sl": 0, "pnl": 0.0}
+            ncols = 3 + (4 if has_live else 0) + (4 if has_paper else 0)
+            live_t = {"bw": 0, "bl": 0, "fw": 0, "fl": 0, "sw": 0, "sl": 0, "pnl": 0.0}
+            paper_t = {"bw": 0, "bl": 0, "fw": 0, "fl": 0, "sw": 0, "sl": 0, "pnl": 0.0}
             prev_coin = None
 
             def _wl(w, l):
@@ -749,37 +770,62 @@ def cmd_monitor(args):
             for coin, iv in sorted_keys:
                 ct = coin_iv_trades[(coin, iv)]
                 if prev_coin and prev_coin != coin:
-                    table.add_row("", "", "", "", "", "")
+                    table.add_row(*[""] * ncols)
                 prev_coin = coin
 
-                bw = sum(1 for t in ct if t.get("type") == "paper_win")
-                bl = sum(1 for t in ct if t.get("type") == "paper_loss")
-                bpnl = sum(calc_pnl(t) for t in ct if t.get("type") in ("paper_win", "paper_loss"))
+                mode = mode_lookup.get((coin, iv), "paper")
+                is_paper = mode == "paper"
+                mode_label = f"[green]{mode}[/]" if mode == "live" else f"[dim]{mode}[/]"
+
+                if is_paper:
+                    bw = sum(1 for t in ct if t.get("type") == "paper_win")
+                    bl = sum(1 for t in ct if t.get("type") == "paper_loss")
+                    bpnl = sum(calc_pnl(t) for t in ct if t.get("type") in ("paper_win", "paper_loss"))
+                else:
+                    bw = sum(1 for t in ct if t.get("type") == "win")
+                    bl = sum(1 for t in ct if t.get("type") == "loss")
+                    bpnl = sum(calc_pnl(t) for t in ct if t.get("type") in ("win", "loss"))
+
                 fw = sum(1 for t in ct if t.get("type") == "fail_win")
                 fl = sum(1 for t in ct if t.get("type") == "fail_loss")
                 sw = sum(1 for t in ct if t.get("type") == "skip_win")
                 sl = sum(1 for t in ct if t.get("type") in ("skip_loss", "skip_none"))
 
+                totals = paper_t if is_paper else live_t
                 totals["bw"] += bw; totals["bl"] += bl
                 totals["fw"] += fw; totals["fl"] += fl
                 totals["sw"] += sw; totals["sl"] += sl
                 totals["pnl"] += bpnl
 
+                bets_s = _wl(bw, bl)
+                fails_s = _wl(fw, fl)
+                skips_s = _wl(sw, sl) if sw + sl > 0 else "—"
                 pnl_s = fmt_pnl(bpnl) if bw + bl > 0 else "—"
-                table.add_row(
-                    coin.upper(), iv,
-                    _wl(bw, bl), _wl(fw, fl),
-                    _wl(sw, sl) if sw + sl > 0 else "—", pnl_s,
-                )
+
+                row = [coin.upper(), iv, mode_label]
+                if has_live:
+                    row += [bets_s, fails_s, skips_s, pnl_s] if not is_paper else ["—", "—", "—", "—"]
+                if has_paper:
+                    row += [bets_s, fails_s, skips_s, pnl_s] if is_paper else ["—", "—", "—", "—"]
+                table.add_row(*row)
 
             table.add_section()
-            table.add_row(
-                "[bold]TOTAL[/]", "",
-                f"[bold]{_wl(totals['bw'], totals['bl'])}[/]",
-                f"[bold]{_wl(totals['fw'], totals['fl'])}[/]",
-                f"[bold]{_wl(totals['sw'], totals['sl'])}[/]",
-                fmt_pnl(totals["pnl"]),
-            )
+            total_row = ["[bold]TOTAL[/]", "", ""]
+            if has_live:
+                total_row += [
+                    f"[bold]{_wl(live_t['bw'], live_t['bl'])}[/]",
+                    f"[bold]{_wl(live_t['fw'], live_t['fl'])}[/]",
+                    f"[bold]{_wl(live_t['sw'], live_t['sl'])}[/]",
+                    fmt_pnl(live_t["pnl"]),
+                ]
+            if has_paper:
+                total_row += [
+                    f"[bold]{_wl(paper_t['bw'], paper_t['bl'])}[/]",
+                    f"[bold]{_wl(paper_t['fw'], paper_t['fl'])}[/]",
+                    f"[bold]{_wl(paper_t['sw'], paper_t['sl'])}[/]",
+                    fmt_pnl(paper_t["pnl"]),
+                ]
+            table.add_row(*total_row)
 
             # Measure actual rendered table height
             _measure_console = Console(file=__import__("io").StringIO(), width=120)
@@ -807,11 +853,13 @@ def cmd_monitor(args):
                 lines.append(_fmt_trade(t))
             available = target_content - len(lines)
 
+        lines.append("")
+        lines.append("[bold]─── PAPER ───[/]")
         if paper_trades and available > 2:
-            lines.append("")
-            lines.append("[bold]─── PAPER ───[/]")
             for t in paper_trades[:max(1, available - 2)]:
                 lines.append(_fmt_trade(t))
+        else:
+            lines.append("[dim]No trades yet[/]")
 
         now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
         status = health.get("status", "unknown")

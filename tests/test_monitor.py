@@ -476,3 +476,171 @@ class TestMonitorRun:
         """Render without config file should still work."""
         mock_client_cls.return_value.is_running.return_value = False
         run(str(tmp_path), "/nonexistent/config.yaml", "test")
+
+
+def _render_table(table):
+    """Render a Rich table to a string for assertion."""
+    from io import StringIO
+
+    from rich.console import Console
+    buf = StringIO()
+    console = Console(file=buf, width=200, no_color=True)
+    console.print(table)
+    return buf.getvalue()
+
+
+def _insert_test_trade(db_path, trade_id, coin, interval, trade_type, pnl=0.05, mode="paper"):
+    """Insert a trade directly into a SQLite db for testing."""
+    import sqlite3
+    slug = f"{coin}-updown-{interval}-{trade_id}"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""CREATE TABLE IF NOT EXISTS trades (
+        id INTEGER PRIMARY KEY, strategy TEXT, type TEXT, slug TEXT,
+        coin TEXT, interval TEXT, side TEXT, buy_price REAL,
+        contracts INTEGER, pnl REAL, sniped_at TEXT, resolved_at TEXT,
+        end_timestamp INTEGER, market_mode TEXT, skip_reason TEXT,
+        ticks_evaluated INTEGER, ev_id INTEGER, token_id TEXT,
+        redeemed INTEGER DEFAULT 0, order_id TEXT, min_price REAL,
+        midpoint REAL, extras TEXT, condition_id TEXT)""")
+    conn.execute(
+        "INSERT INTO trades (id, strategy, type, slug, coin, interval, side, buy_price, "
+        "contracts, pnl, sniped_at, resolved_at, market_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (trade_id, "favorite", trade_type, slug, coin, interval, "up", 0.95,
+         5, pnl, "2026-04-01T00:00:00Z", "2026-04-01T00:05:00Z", mode),
+    )
+    conn.commit()
+    conn.close()
+
+
+class TestStrategyTableModes:
+    """Test build_strategy_table with different mode combinations."""
+
+    def test_paper_only_shows_paper_columns(self, tmp_path):
+        """All paper markets → only Paper columns, no Live columns."""
+        scfg = {
+            "markets": [
+                {"coin": "btc", "interval": "5m", "mode": "paper"},
+                {"coin": "eth", "interval": "5m", "mode": "paper"},
+            ],
+        }
+        table = build_strategy_table("favorite", scfg, str(tmp_path))
+        out = _render_table(table)
+        assert "Paper Bets" in out
+        assert "Live Bets" not in out
+        assert "MODE" in out
+        assert "paper" in out.lower()
+
+    def test_live_only_shows_live_columns(self, tmp_path):
+        """All live markets → only Live columns, no Paper columns."""
+        scfg = {
+            "markets": [
+                {"coin": "btc", "interval": "5m", "mode": "live"},
+                {"coin": "eth", "interval": "5m", "mode": "live"},
+            ],
+        }
+        table = build_strategy_table("favorite", scfg, str(tmp_path))
+        out = _render_table(table)
+        assert "Live Bets" in out
+        assert "Paper Bets" not in out
+
+    def test_mixed_modes_shows_both_columns(self, tmp_path):
+        """Mix of live and paper → both column groups."""
+        scfg = {
+            "markets": [
+                {"coin": "btc", "interval": "5m", "mode": "live"},
+                {"coin": "eth", "interval": "5m", "mode": "paper"},
+            ],
+        }
+        table = build_strategy_table("favorite", scfg, str(tmp_path))
+        out = _render_table(table)
+        assert "Live Bets" in out
+        assert "Paper Bets" in out
+
+    def test_no_markets_returns_none(self, tmp_path):
+        """Empty markets list → None."""
+        scfg = {"markets": []}
+        assert build_strategy_table("favorite", scfg, str(tmp_path)) is None
+
+    def test_paper_only_with_trades(self, tmp_path):
+        """Paper markets with actual trades → counts show up."""
+        db_path = tmp_path / "bot.db"
+        _insert_test_trade(db_path, 1, "btc", "5m", "paper_win", 0.05)
+        _insert_test_trade(db_path, 2, "btc", "5m", "paper_loss", -0.95)
+        _insert_test_trade(db_path, 3, "btc", "5m", "fail_win", 0.0)
+
+        scfg = {"markets": [{"coin": "btc", "interval": "5m", "mode": "paper"}]}
+        table = build_strategy_table("favorite", scfg, str(tmp_path))
+        out = _render_table(table)
+        assert "1W/1L" in out  # paper bets
+        assert "1W/0L" in out  # fails
+
+    def test_live_only_with_trades(self, tmp_path):
+        """Live markets with actual trades → live counts show up."""
+        db_path = tmp_path / "bot.db"
+        _insert_test_trade(db_path, 1, "btc", "5m", "win", 0.05, mode="live")
+        _insert_test_trade(db_path, 2, "btc", "5m", "loss", -0.95, mode="live")
+
+        scfg = {"markets": [{"coin": "btc", "interval": "5m", "mode": "live"}]}
+        table = build_strategy_table("favorite", scfg, str(tmp_path))
+        out = _render_table(table)
+        assert "Live Bets" in out
+        assert "1W/1L" in out
+
+    def test_mixed_with_trades_in_both(self, tmp_path):
+        """Mixed modes with trades in both → correct columns populated."""
+        db_path = tmp_path / "bot.db"
+        _insert_test_trade(db_path, 1, "btc", "5m", "win", 0.05, mode="live")
+        _insert_test_trade(db_path, 2, "eth", "5m", "paper_win", 0.03, mode="paper")
+
+        scfg = {
+            "markets": [
+                {"coin": "btc", "interval": "5m", "mode": "live"},
+                {"coin": "eth", "interval": "5m", "mode": "paper"},
+            ],
+        }
+        table = build_strategy_table("favorite", scfg, str(tmp_path))
+        out = _render_table(table)
+        assert "Live Bets" in out
+        assert "Paper Bets" in out
+        assert "BTC" in out
+        assert "ETH" in out
+
+    def test_zero_trades_shows_dashes(self, tmp_path):
+        """Markets with zero trades → all dashes."""
+        scfg = {"markets": [{"coin": "btc", "interval": "5m", "mode": "paper"}]}
+        table = build_strategy_table("favorite", scfg, str(tmp_path))
+        out = _render_table(table)
+        assert "—" in out  # em dash for empty cells
+
+    def test_mixed_with_trades_only_in_live(self, tmp_path):
+        """Mixed modes, trades only in live → paper shows dashes."""
+        db_path = tmp_path / "bot.db"
+        _insert_test_trade(db_path, 1, "btc", "5m", "win", 0.05, mode="live")
+
+        scfg = {
+            "markets": [
+                {"coin": "btc", "interval": "5m", "mode": "live"},
+                {"coin": "eth", "interval": "5m", "mode": "paper"},
+            ],
+        }
+        table = build_strategy_table("favorite", scfg, str(tmp_path))
+        out = _render_table(table)
+        assert "1W/0L" in out  # live btc
+        # ETH paper row should have dashes
+        assert "Paper Bets" in out
+
+    def test_mixed_with_trades_only_in_paper(self, tmp_path):
+        """Mixed modes, trades only in paper → live shows dashes."""
+        db_path = tmp_path / "bot.db"
+        _insert_test_trade(db_path, 1, "eth", "5m", "paper_win", 0.03, mode="paper")
+
+        scfg = {
+            "markets": [
+                {"coin": "btc", "interval": "5m", "mode": "live"},
+                {"coin": "eth", "interval": "5m", "mode": "paper"},
+            ],
+        }
+        table = build_strategy_table("favorite", scfg, str(tmp_path))
+        out = _render_table(table)
+        assert "Live Bets" in out
+        assert "1W/0L" in out  # paper eth
