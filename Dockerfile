@@ -3,7 +3,8 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-RUN apt-get update -qq && apt-get install -y -qq binutils && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends binutils \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 COPY pyproject.toml uv.lock* ./
