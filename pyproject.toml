@@ -16,6 +16,7 @@ dependencies = [
     "pyfiglet>=1.0",
     "pygments>=2.20",
     "rich>=14.3.3",
+    "aiohttp>=3.13.4",
     "web3>=7.0,<8",
 ]
 
