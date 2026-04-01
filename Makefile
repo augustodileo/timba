@@ -3,17 +3,21 @@
 # Usage:
 #   make              build binary (runs tests first)
 #   make test         run tests
+#   make lint         ruff + bandit
+#   make audit        pip-audit + secret scan
 #   make build        build binary locally (runs tests first)
 #   make install      build + install to ~/.local/bin/ + config to ~/.timba/
 #   make docker       build Docker image
+#   make docker-test  smoke test + structure test on Docker image
 #   make package      build + tar.gz for release (CI uses this)
 #   make clean        remove build artifacts
 
 REGISTRY := $(shell git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$$||' | xargs -I{} echo "ghcr.io/{}")
 
 # Version from hatch-vcs (the single source of truth).
-# Requires uv sync first, so targets that need it call _version.
-.PHONY: all sync lint test build install docker package clean
+_version = $(shell uv run python -c "from timba._version import __version__; print(__version__)" 2>/dev/null || echo dev)
+
+.PHONY: all sync lint audit test build install docker docker-image docker-test package clean
 
 all: build
 
@@ -22,15 +26,17 @@ all: build
 sync:
 	@uv sync --all-extras -q
 
-# ── Version (after sync, hatch-vcs has generated _version.py) ─
-
-_version = $(shell uv run python -c "from timba._version import __version__; print(__version__)" 2>/dev/null || echo dev)
-
 # ── Lint ─────────────────────────────────────────────────────
 
 lint: sync
 	uv run ruff check src/ tests/
 	uv run bandit -r src/timba/ -c pyproject.toml -q
+
+# ── Audit ────────────────────────────────────────────────────
+
+audit: sync
+	.github/hooks/pre-commit all
+	uv run pip-audit --skip-editable
 
 # ── Test ─────────────────────────────────────────────────────
 
@@ -57,13 +63,22 @@ install: build
 	@echo "  Run:    timba start"
 
 # ── Docker ────────────────────────────────────────────────────
-# Docker has no .git, so we pass the version as a build-arg.
+
+docker-image:
+	@echo "$(REGISTRY):$(_version)"
 
 docker: sync
-	docker build --build-arg VERSION=$(_version) -t $(REGISTRY):$(_version) -t timba:ci .
+	docker build --build-arg VERSION=$(_version) -t $(REGISTRY):$(_version) .
 	@echo ""
 	@echo "Built: $(REGISTRY):$(_version)"
-	@echo "  Run: docker run -e POLYMARKET_PRIVATE_KEY=0x... -e POLYMARKET_FUNDER=0x... $(REGISTRY):$(_version)"
+
+docker-test: sync
+	docker run --rm $(REGISTRY):$(_version) --version
+	docker run --rm --entrypoint "" $(REGISTRY):$(_version) sh -c '\
+		test -f /app/timba && \
+		test -f /app/config.yaml && \
+		whoami | grep -q bot && \
+		echo "Structure tests passed"'
 
 # ── Package (CI) ──────────────────────────────────────────────
 

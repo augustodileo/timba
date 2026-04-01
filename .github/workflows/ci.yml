@@ -27,14 +27,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check for leaked secrets
-        run: .github/hooks/pre-commit all
-
-      - name: Lint + SAST
-        run: make lint
-
-      - name: Audit dependencies
-        run: uv run pip-audit --skip-editable
+      - run: make lint
+      - run: make audit
 
   test:
     name: Test
@@ -48,8 +42,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Run tests
-        run: make test
+      - run: make test
 
   docker:
     name: Docker
@@ -63,25 +56,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build Docker image
-        run: make docker
+      - run: make docker
 
-      - name: Smoke test
-        run: docker run --rm timba:ci --version
+      - name: Get image ref
+        id: image
+        run: echo "ref=$(make docker-image)" >> "$GITHUB_OUTPUT"
 
-      - name: Container structure test
-        run: |
-          docker run --rm --entrypoint "" timba:ci sh -c '
-            test -f /app/timba &&
-            test -f /app/config.yaml &&
-            whoami | grep -q bot &&
-            echo "Structure tests passed"
-          '
+      - run: make docker-test
 
-      - name: Scan image for CVEs (Trivy)
+      - name: Scan image for CVEs
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: timba:ci
+          image-ref: ${{ steps.image.outputs.ref }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
