@@ -28,7 +28,8 @@ _writer_thread: threading.Thread | None = None
 _writer_running = False
 
 # Rotation coordination
-_rotation_event = threading.Event()
+_rotation_event = threading.Event()   # signal writer to close connection
+_rotation_done = threading.Event()    # writer confirms connection closed
 _rotation_lock = threading.Lock()
 _db_version = 0  # incremented on each rotation; read conns check this
 
@@ -196,6 +197,7 @@ def reset() -> None:
     _data_dir = None
     _db_version = 0
     _rotation_event.clear()
+    _rotation_done.clear()
 
 
 # ── Rotation ───────────────────────────────────────────────────────
@@ -233,7 +235,21 @@ def rotate(reason: str = "scheduled") -> Path | None:
         if _write_queue is not None:
             _write_queue.join()
 
-        # 2. Rename current DB (+ WAL/SHM files)
+        # 2. Close all connections before renaming (required on Windows)
+        _rotation_done.clear()
+        _rotation_event.set()  # signal writer to close
+        _rotation_done.wait(timeout=5)  # wait for writer to confirm
+
+        # Close read connections on this thread
+        conns = getattr(_read_local, "connections", {})
+        for c in conns.values():
+            try:
+                c.close()
+            except Exception:
+                pass
+        _read_local.connections = {}
+
+        # 3. Rename current DB (+ WAL/SHM files) — safe now, all connections closed
         old_path.rename(archive_path)
         for suffix in ("-wal", "-shm"):
             src = Path(str(old_path) + suffix)
@@ -241,7 +257,7 @@ def rotate(reason: str = "scheduled") -> Path | None:
                 dst = Path(str(archive_path) + suffix)
                 src.rename(dst)
 
-        # 3. Create fresh bot.db with schema
+        # 4. Create fresh bot.db with schema
         new_path = _data_dir / DB_FILENAME
         _db_path = new_path
         conn = sqlite3.connect(str(_db_path), timeout=10)
@@ -252,16 +268,9 @@ def rotate(reason: str = "scheduled") -> Path | None:
         conn.commit()
         conn.close()
 
-        # 4. Invalidate read connection caches (version bump)
+        # 5. Invalidate read connection caches + let writer reopen
         _db_version += 1
-
-        # 5. Signal writer thread to swap its connection and wait for ack
-        _rotation_event.set()
-        import time as _time
-        for _ in range(200):  # max ~1s
-            if not _rotation_event.is_set():
-                break
-            _time.sleep(0.005)
+        _rotation_event.clear()  # writer sees this and reopens connection
 
         logger.info("DB rotated: %s -> %s (%s)", DB_FILENAME, archive_name, reason)
         return archive_path
@@ -363,11 +372,15 @@ def _writer_loop():
     q = _write_queue
 
     while _writer_running or (q is not None and not q.empty()):
-        # Check for rotation signal (when idle or between batches)
+        # Rotation: close connection, signal done, wait for rotate() to finish
         if _rotation_event.is_set():
             conn.close()
+            _rotation_done.set()
+            # Wait until rotate() clears _rotation_event (file ops done)
+            while _rotation_event.is_set():
+                import time as _t
+                _t.sleep(0.005)
             conn = _open_writer_conn()
-            _rotation_event.clear()
 
         try:
             item = q.get(timeout=0.5)

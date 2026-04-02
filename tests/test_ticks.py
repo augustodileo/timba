@@ -1,10 +1,7 @@
 """Tests for ticks.py — tick/EV ID generation and data writing."""
 
 import json
-import sys
 from unittest.mock import patch
-
-import pytest
 
 from timba import db
 from timba.ticks import (
@@ -189,7 +186,6 @@ def _sample_tick(tick_id):
     }
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot rename open files")
 class TestDbRotation:
     def test_rotate_creates_archive(self, tmp_path):
         db.init(tmp_path)
