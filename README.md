@@ -15,12 +15,16 @@ Automated trading bot for [Polymarket](https://polymarket.com)'s recurring crypt
 
 ### Install
 
-**Binary**
-
-Installs a standalone binary to `~/.local/bin/timba` and default config to `~/.timba/config.yaml`.
+**Linux / macOS**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/augustodileo/timba/main/install.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/augustodileo/timba/main/install.ps1 | iex
 ```
 
 Then start the bot:
@@ -69,7 +73,11 @@ docker run \
 Re-running the installer downloads the latest release. Config and data are preserved.
 
 ```bash
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/augustodileo/timba/main/install.sh | sh
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/augustodileo/timba/main/install.ps1 | iex
 ```
 
 ### Usage
