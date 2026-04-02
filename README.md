@@ -15,15 +15,15 @@ Automated trading bot for [Polymarket](https://polymarket.com)'s recurring crypt
 
 ### Install
 
-**Linux / macOS**
+**Binary**
+
+Installs a standalone binary and default config to `~/.timba/config.yaml`.
 
 ```bash
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/augustodileo/timba/main/install.sh | sh
-```
 
-**Windows (PowerShell)**
-
-```powershell
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/augustodileo/timba/main/install.ps1 | iex
 ```
 
