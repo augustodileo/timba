@@ -19,11 +19,15 @@ Automated trading bot for [Polymarket](https://polymarket.com)'s recurring crypt
 
 Installs a standalone binary and default config to `~/.timba/config.yaml`.
 
-```bash
-# Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/augustodileo/timba/main/install.sh | sh
+**Linux / macOS**
 
-# Windows (PowerShell)
+```bash
+curl -fsSL https://raw.githubusercontent.com/augustodileo/timba/main/install.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
 irm https://raw.githubusercontent.com/augustodileo/timba/main/install.ps1 | iex
 ```
 
@@ -73,10 +77,10 @@ docker run \
 Re-running the installer downloads the latest release. Config and data are preserved.
 
 ```bash
-# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/augustodileo/timba/main/install.sh | sh
+```
 
-# Windows (PowerShell)
+```powershell
 irm https://raw.githubusercontent.com/augustodileo/timba/main/install.ps1 | iex
 ```
 
