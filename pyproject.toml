@@ -17,6 +17,7 @@ dependencies = [
     "pygments>=2.20",
     "rich>=14.3.3",
     "aiohttp>=3.13.4",
+    "tzdata>=2024.1",
     "web3>=7.0,<8",
 ]
 
