@@ -27,6 +27,8 @@ jobs:
             target: darwin-x64
           - os: macos-14
             target: darwin-arm64
+          - os: windows-latest
+            target: windows-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -38,6 +40,7 @@ jobs:
           python-version: "3.12"
 
       - name: Build and package
+        shell: bash
         env:
           TARGET: ${{ matrix.target }}
         run: make package

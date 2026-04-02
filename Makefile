@@ -84,11 +84,15 @@ docker-test: sync
 		echo "Structure tests passed"'
 
 # ── Package (CI) ──────────────────────────────────────────────
+# Detects OS for binary name (.exe on Windows) and checksum tool.
+
+_binary = $(shell ls dist/timba.exe 2>/dev/null && echo dist/timba.exe || echo dist/timba)
+_sha = $(shell command -v shasum >/dev/null 2>&1 && echo "shasum -a 256" || echo sha256sum)
 
 package: build
 	cp config.yaml dist/config.yaml
-	cd dist && tar czf "timba-$(_version)-$${TARGET:-local}.tar.gz" timba config.yaml
-	cd dist && shasum -a 256 "timba-$(_version)-$${TARGET:-local}.tar.gz" > "timba-$(_version)-$${TARGET:-local}.tar.gz.sha256"
+	cd dist && tar czf "timba-$(_version)-$${TARGET:-local}.tar.gz" $(notdir $(_binary)) config.yaml
+	cd dist && $(_sha) "timba-$(_version)-$${TARGET:-local}.tar.gz" > "timba-$(_version)-$${TARGET:-local}.tar.gz.sha256"
 	@echo "Packaged: dist/timba-$(_version)-$${TARGET:-local}.tar.gz"
 
 # ── Clean ─────────────────────────────────────────────────────

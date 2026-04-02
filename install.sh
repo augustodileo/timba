@@ -46,6 +46,10 @@ ARCH="$(uname -m)"
 case "$OS" in
     Linux)  OS="linux" ;;
     Darwin) OS="darwin" ;;
+    MINGW*|MSYS*|CYGWIN*)
+        echo "Error: this installer is for Linux/macOS." >&2
+        echo "  Download the Windows binary from: https://github.com/$REPO/releases" >&2
+        exit 1 ;;
     *)      echo "Error: unsupported OS: $OS" >&2; exit 1 ;;
 esac
 

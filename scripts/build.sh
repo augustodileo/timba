@@ -22,17 +22,26 @@ uv pip install pyinstaller -q 2>/dev/null
 VERSION=$(uv run python -c "from timba._version import __version__; print(__version__)" 2>/dev/null || echo dev)
 echo "Building timba ${VERSION}..."
 
+# OS-specific: PyInstaller --add-data separator and binary name
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+    SEP=";"
+    BIN="dist/timba.exe"
+else
+    SEP=":"
+    BIN="dist/timba"
+fi
+
 uv run pyinstaller --onefile --name timba -y \
     --collect-all timba \
     --collect-all pyfiglet \
     --hidden-import timba.strategies.favorite \
-    --add-data "config.yaml:." \
-    --add-data ".env.example:." \
+    --add-data "config.yaml${SEP}." \
+    --add-data ".env.example${SEP}." \
     src/timba/cli.py 2>&1 | grep -E "^[0-9]+ INFO: (Building|Build complete)" || true
 
 # Smoke test
-./dist/timba --version > /dev/null
+"$BIN" --version > /dev/null
 
-SIZE=$(ls -lh dist/timba | awk '{print $5}')
+SIZE=$(ls -lh "$BIN" | awk '{print $5}')
 echo ""
-echo "Built: dist/timba ($SIZE)"
+echo "Built: $BIN ($SIZE)"
