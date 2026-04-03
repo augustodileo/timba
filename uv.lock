@@ -1616,18 +1616,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pytest-mock"
-version = "3.15.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pytest" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/68/14/eb014d26be205d38ad5ad20d9a80f7d201472e08167f0bb4361e251084a9/pytest_mock-3.15.1.tar.gz", hash = "sha256:1849a238f6f396da19762269de72cb1814ab44416fa73a8686deac10b0d87a0f", size = 34036, upload-time = "2025-09-16T16:37:27.081Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/cc/06253936f4a7fa2e0f48dfe6d851d9c56df896a9ab09ac019d70b760619c/pytest_mock-3.15.1-py3-none-any.whl", hash = "sha256:0a25e2eb88fe5168d535041d09a4529a188176ae608a6d249ee65abc0949630d", size = 10095, upload-time = "2025-09-16T16:37:25.734Z" },
-]
-
-[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -1998,17 +1986,15 @@ wheels = [
 name = "timba"
 source = { editable = "." }
 dependencies = [
-    { name = "aiohttp" },
     { name = "jsonschema" },
     { name = "polymarket-apis" },
     { name = "py-builder-relayer-client" },
     { name = "py-builder-signing-sdk" },
     { name = "pyfiglet" },
-    { name = "pygments" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "rich" },
-    { name = "tzdata" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "web3" },
 ]
 
@@ -2018,29 +2004,25 @@ dev = [
     { name = "pip-audit" },
     { name = "pytest" },
     { name = "pytest-cov" },
-    { name = "pytest-mock" },
     { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.13.4" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.8" },
-    { name = "jsonschema", specifier = ">=4.20" },
+    { name = "jsonschema", specifier = ">=4.20,<5" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
     { name = "polymarket-apis", specifier = ">=0.5.3,<0.6" },
     { name = "py-builder-relayer-client", specifier = ">=0.0.1,<0.1" },
     { name = "py-builder-signing-sdk", specifier = ">=0.0.2,<0.1" },
-    { name = "pyfiglet", specifier = ">=1.0" },
-    { name = "pygments", specifier = ">=2.20" },
+    { name = "pyfiglet", specifier = ">=1.0,<2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.12" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "requests", specifier = ">=2.33" },
-    { name = "rich", specifier = ">=14.3.3" },
+    { name = "pyyaml", specifier = ">=6.0,<7" },
+    { name = "requests", specifier = ">=2.33,<3" },
+    { name = "rich", specifier = ">=14.0,<15" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11" },
-    { name = "tzdata", specifier = ">=2024.1" },
+    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
     { name = "web3", specifier = ">=7.0,<8" },
 ]
 provides-extras = ["dev"]

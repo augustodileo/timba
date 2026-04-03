@@ -238,6 +238,53 @@ class TestTickRecorder:
                 recorder.run_loop(is_running)
             mock_record.assert_not_called()
 
+    def test_run_loop_stops_mid_slug_iteration(self):
+        """run_loop breaks out of inner slug loop when is_running() returns False (line 58)."""
+        # Create many positions so the inner loop has work to do
+        positions = {}
+        for i in range(10):
+            slug = f"slug-{i}"
+            positions[slug] = _make_position(slug=slug, terminal=False)
+
+        recorded_ticks = {}
+
+        feed = MagicMock()
+        feed.is_healthy.return_value = True
+        feed.get_direction.return_value = FakeSignal()
+
+        cache = MagicMock()
+        cache.get.return_value = FakeSnapshot()
+
+        recorder = TickRecorder(
+            positions={"fav": positions},
+            strategies={"fav": "fav"},
+            recorded_ticks=recorded_ticks,
+            feed=feed,
+            market_cache=cache,
+        )
+
+        # is_running returns True initially, then False after recording a few ticks
+        record_count = 0
+        def counting_record_tick(**kwargs):
+            nonlocal record_count
+            record_count += 1
+            return record_count
+
+        call_count = 0
+        def is_running():
+            nonlocal call_count
+            call_count += 1
+            # Let the outer loop start (call 1 = True), then stop mid-iteration
+            # is_running is called once at outer while, plus once per slug in inner loop
+            return call_count <= 3  # stops after processing a few slugs
+
+        with patch("timba.tick_recorder.record_tick", side_effect=counting_record_tick):
+            with patch("timba.tick_recorder.time.sleep"):
+                recorder.run_loop(is_running)
+
+        # Should have recorded fewer than all 10 positions due to early break
+        assert record_count < 10
+
     def test_run_loop_handles_exception(self):
         """run_loop catches exceptions and continues."""
         recorded_ticks = {}

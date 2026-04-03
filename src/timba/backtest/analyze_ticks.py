@@ -46,7 +46,7 @@ EV_BUCKET_ORDER = ["<=0", "0-.001", ".001-.005", ".005-.01", ".01-.05", ".05-.10
 
 
 def analyze_ticks_main(data_dir: Path, coin: str | None = None,
-                       interval: str | None = None, strategy: str = "favorite"):
+                       interval: str | None = None, strategy: str = "favorite") -> None:
     """Analyze tick data by joining with trade outcomes for EV calibration."""
     ticks_by_slug, skip_count = load_ticks_with_evs(data_dir, strategy=strategy)
     if not ticks_by_slug:

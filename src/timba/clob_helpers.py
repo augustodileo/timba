@@ -19,7 +19,7 @@ except ImportError:
     _NETWORK_ERRORS = (requests.RequestException, TimeoutError, OSError, ValueError)
 
 
-def retry_api(fn, *args, retries=2, backoff=0.5, **kwargs):
+def retry_api(fn: object, *args: object, retries: int = 2, backoff: float = 0.5, **kwargs: object) -> object:
     """Call fn with retries, exponential backoff, jitter, and 429 awareness.
 
     On HTTP 429: respects Retry-After header if present, otherwise uses backoff.
@@ -41,7 +41,7 @@ def retry_api(fn, *args, retries=2, backoff=0.5, **kwargs):
                 retry_after = e.response.headers.get("Retry-After")
                 wait = float(retry_after) if retry_after else backoff * (2 ** attempt)
                 time.sleep(wait + random.uniform(0, 0.5))
-                logger.debug("Rate limited (429), waiting %.1fs", wait)
+                logger.warning("Rate limited (429), waiting %.1fs", wait)
                 continue
 
             # Other errors: exponential backoff with jitter
@@ -50,7 +50,7 @@ def retry_api(fn, *args, retries=2, backoff=0.5, **kwargs):
     raise last_err
 
 
-def _get_midpoint(clob_client, token_id: str) -> float | None:
+def _get_midpoint(clob_client: object, token_id: str) -> float | None:
     """Fetch the current midpoint price for a token from the CLOB (with retry)."""
     try:
         mid = retry_api(clob_client.get_midpoint, token_id)
@@ -61,7 +61,7 @@ def _get_midpoint(clob_client, token_id: str) -> float | None:
         return None
 
 
-def simulate_fill(clob_client, token_id: str, size: int) -> tuple[float, int, float] | None:
+def simulate_fill(clob_client: object, token_id: str, size: int) -> tuple[float, int, float] | None:
     """Simulate filling a BUY order against the live orderbook.
 
     Walks through ask levels to calculate the average fill price and
@@ -100,7 +100,7 @@ def simulate_fill(clob_client, token_id: str, size: int) -> tuple[float, int, fl
     return (avg_price, total_filled, tick_size)
 
 
-def _cancel(clob_client, order_id: str | None):
+def _cancel(clob_client: object, order_id: str | None) -> None:
     """Cancel an order, ignoring errors."""
     if not order_id or order_id.startswith("paper_"):
         return

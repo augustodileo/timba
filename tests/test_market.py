@@ -267,3 +267,157 @@ class TestDiscoverWithHourly:
         mock_fetch.return_value = market
         results = discover_active_markets([MarketSeries("btc", "1h", 3600)], look_ahead=1)
         assert len(results) >= 1
+
+
+# ── Coverage gap tests ──
+
+
+class TestParseSlug:
+    """Test parse_slug function (lines 42-49)."""
+
+    def test_5m_slug(self):
+        from timba.market import parse_slug
+        assert parse_slug("btc-updown-5m-1774609200") == ("btc", "5m")
+
+    def test_15m_slug(self):
+        from timba.market import parse_slug
+        assert parse_slug("eth-updown-15m-1774400000") == ("eth", "15m")
+
+    def test_hourly_slug(self):
+        from timba.market import parse_slug
+        assert parse_slug("bitcoin-up-or-down-march-23-2026-5pm-et") == ("btc", "1h")
+
+    def test_hourly_slug_unknown_coin(self):
+        from timba.market import parse_slug
+        coin, interval = parse_slug("newcoin-up-or-down-march-23-2026-5pm-et")
+        assert interval == "1h"
+        assert coin == "newcoin"  # falls back to full_name
+
+    def test_unknown_slug(self):
+        from timba.market import parse_slug
+        assert parse_slug("unknown-slug") == ("", "")
+
+
+class TestDiscoverDefaultSeriesList:
+    """Test discover_active_markets with default series_list (line 129)."""
+
+    @patch("timba.market._fetch_market_by_slug")
+    @patch("timba.market._generate_hourly_slugs")
+    def test_uses_default_series_when_none(self, mock_hourly, mock_fetch):
+        """When series_list is None, uses DEFAULT_SERIES (line 128-129)."""
+        mock_fetch.return_value = None
+        mock_hourly.return_value = []
+        # Call with series_list=None
+        results = discover_active_markets(series_list=None, look_ahead=0)
+        assert results == []
+        # The function should have iterated over DEFAULT_SERIES
+        # _generate_hourly_slugs should have been called for hourly series
+        assert mock_hourly.call_count > 0
+
+
+class TestDiscoverKnownSlugs:
+    """Test discover_active_markets with known_slugs (lines 151-152)."""
+
+    @patch("timba.market._fetch_market_by_slug")
+    def test_skips_known_slugs(self, mock_fetch):
+        """Known slugs are skipped without HTTP call (lines 150-152)."""
+        mock_fetch.return_value = None
+        now = int(time.time())
+        series = [MarketSeries("btc", "5m", 300)]
+        base_ts = now - (now % 300)
+
+        # Create known slugs that match what discover would generate
+        known = set()
+        for offset in range(-300, 300 * 2, 300):
+            known.add(f"btc-updown-5m-{base_ts + offset}")
+
+        results = discover_active_markets(series, look_ahead=0, known_slugs=known)
+        assert results == []
+        # _fetch_market_by_slug should NOT be called for known slugs
+        mock_fetch.assert_not_called()
+
+
+class TestParseUpdownMarketEdgeCases:
+    """Edge cases in _parse_updown_market (lines 265, 288-289)."""
+
+    def test_rejects_single_token(self):
+        """Two outcomes but only one token → returns None (line 264-265)."""
+        raw = {
+            "conditionId": "0x1",
+            "question": "BTC Up or Down",
+            "slug": "btc-updown-5m-100",
+            "outcomes": '["Up", "Down"]',
+            "clobTokenIds": '["only_one_token"]',
+            "outcomePrices": '["0.5", "0.5"]',
+        }
+        result = _parse_updown_market(raw, MarketSeries("btc", "5m", 300))
+        assert result is None
+
+    def test_rejects_three_tokens(self):
+        """Two outcomes but three tokens → returns None (line 264-265)."""
+        raw = {
+            "conditionId": "0x1",
+            "question": "BTC Up or Down",
+            "slug": "btc-updown-5m-100",
+            "outcomes": '["Up", "Down"]',
+            "clobTokenIds": '["t1", "t2", "t3"]',
+            "outcomePrices": '["0.5", "0.5"]',
+        }
+        result = _parse_updown_market(raw, MarketSeries("btc", "5m", 300))
+        assert result is None
+
+    def test_slug_without_timestamp_returns_end_ts_zero(self):
+        """Slug that can't be parsed for timestamp → end_ts=0 (lines 288-289)."""
+        raw = {
+            "conditionId": "0x1",
+            "question": "BTC Up or Down",
+            "slug": "btc-updown-5m-notanumber",
+            "outcomes": '["Up", "Down"]',
+            "clobTokenIds": '["t1", "t2"]',
+            "outcomePrices": '["0.5", "0.5"]',
+        }
+        result = _parse_updown_market(raw, MarketSeries("btc", "5m", 300))
+        assert result is not None
+        assert result.end_timestamp == 0
+
+    def test_empty_slug_returns_end_ts_zero(self):
+        """Empty slug → IndexError on rsplit → end_ts=0 (lines 288-289)."""
+        raw = {
+            "conditionId": "0x1",
+            "question": "BTC Up or Down",
+            "slug": "",
+            "outcomes": '["Up", "Down"]',
+            "clobTokenIds": '["t1", "t2"]',
+            "outcomePrices": '["0.5", "0.5"]',
+        }
+        result = _parse_updown_market(raw, MarketSeries("btc", "5m", 300))
+        assert result is not None
+        assert result.end_timestamp == 0
+
+    def test_uses_tokenIds_fallback(self):
+        """When clobTokenIds missing, falls back to tokenIds (line 260)."""
+        raw = {
+            "conditionId": "0x1",
+            "question": "BTC Up or Down",
+            "slug": "btc-updown-5m-1000",
+            "outcomes": '["Up", "Down"]',
+            "tokenIds": '["tok_up", "tok_down"]',
+            "outcomePrices": '["0.5", "0.5"]',
+        }
+        result = _parse_updown_market(raw, MarketSeries("btc", "5m", 300))
+        assert result is not None
+        assert result.token_id_up == "tok_up"
+
+    def test_uses_condition_id_fallback(self):
+        """When conditionId missing, uses condition_id (line 292)."""
+        raw = {
+            "condition_id": "0xfallback",
+            "question": "BTC Up or Down",
+            "slug": "btc-updown-5m-1000",
+            "outcomes": '["Up", "Down"]',
+            "clobTokenIds": '["t1", "t2"]',
+            "outcomePrices": '["0.5", "0.5"]',
+        }
+        result = _parse_updown_market(raw, MarketSeries("btc", "5m", 300))
+        assert result is not None
+        assert result.condition_id == "0xfallback"

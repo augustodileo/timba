@@ -128,6 +128,25 @@ class TestEvaluate:
         assert pos.side == "up"  # up has higher midpoint
 
 
+class TestEvaluateDownSide:
+    def test_selects_down_when_mid_down_higher(self):
+        """evaluate selects 'down' when mid_down > mid_up (line 106)."""
+        pos = _make_pos(min_price=0.90)
+        tick = _make_tick(mid_up=0.10, mid_down=0.98, fill_up=0.15, fill_down=0.99)
+        strat.evaluate(pos, tick)
+        assert pos.side == "down"
+
+    def test_weak_signal_skips_bet(self):
+        """evaluate skips bet when signal change is below min_signal_chg (line 135)."""
+        pos = _make_pos(min_signal_chg=0.50)  # require 0.50% change
+        # Signal change is only 0.1% (default in _make_tick)
+        tick = _make_tick(mid_up=0.99, fill_up=0.99,
+                          signal=DirectionSignal("up", 0.1, 30, False, 0.5))
+        decision = strat.evaluate(pos, tick)
+        assert decision.should_bet is False
+        assert "weak signal" in decision.reason
+
+
 class TestResolve:
     def test_win_calculates_pnl(self):
         pos = _make_pos(buy_price=0.95, contracts=10)
@@ -179,3 +198,69 @@ class TestConfigSchema:
         assert "min_price" in schema["strategy"]
         assert "contracts_per_trade" in schema["strategy"]
         assert "min_price" in schema["market"]["properties"]
+
+
+class TestBaseConfigSchema:
+    """Cover Strategy.config_schema() default return (line 139)."""
+
+    def test_base_config_schema_returns_empty_dict(self):
+        from timba.strategies import Strategy
+
+        # Create a minimal concrete subclass that does NOT override config_schema
+        class MinimalStrategy(Strategy):
+            @property
+            def name(self):
+                return "minimal"
+
+            def create_position(self, market, market_cfg, global_cfg):
+                pass
+
+            def evaluate(self, pos, tick):
+                pass
+
+            def on_bet(self, pos, decision):
+                pass
+
+            def resolve(self, pos, won):
+                pass
+
+            def extra_fields(self, pos):
+                return {}
+
+        result = MinimalStrategy.config_schema()
+        assert result == {}
+
+
+class TestLoadStrategiesErrorHandling:
+    """Cover the except block in load_strategies (lines 178-180)."""
+
+    def test_bad_strategy_module_logged_not_raised(self, tmp_path, monkeypatch):
+        """A strategy module that fails to import should be skipped, not crash."""
+        import timba.strategies as strat_mod
+
+        # Create a bad strategy file in the strategies directory
+        strategies_dir = strat_mod.__path__[0] if hasattr(strat_mod, '__path__') else None
+        if strategies_dir is None:
+            pytest.skip("Cannot locate strategies package directory")
+
+        from pathlib import Path
+        bad_file = Path(strategies_dir) / "_test_bad_strategy.py"
+        try:
+            bad_file.write_text("raise ImportError('deliberate test failure')\n")
+            # load_strategies globs *.py excluding _ prefixed, so this won't trigger.
+            # Instead, monkeypatch importlib.import_module for a known module.
+            import importlib
+            original_import = importlib.import_module
+
+            def failing_import(name, *args, **kwargs):
+                if "timba.strategies.favorite" in name:
+                    raise RuntimeError("test load failure")
+                return original_import(name, *args, **kwargs)
+
+            monkeypatch.setattr(importlib, "import_module", failing_import)
+
+            # This should not raise — the error is logged and skipped
+            strat_mod.load_strategies()
+        finally:
+            if bad_file.exists():
+                bad_file.unlink()

@@ -30,7 +30,7 @@ class StrategyConfig:
     Loaded directly from the YAML section matching the strategy name.
     Each strategy knows its own expected keys.
     """
-    def __init__(self, raw: dict | None = None):
+    def __init__(self, raw: dict | None = None) -> None:
         self._raw = raw or {}
 
     @property
@@ -41,15 +41,15 @@ class StrategyConfig:
     def markets(self) -> list[dict]:
         return self._raw.get("markets", [])
 
-    def get(self, key: str, default=None):
+    def get(self, key: str, default: object = None) -> object:
         return self._raw.get(key, default)
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> object:
         if name.startswith("_"):
             raise AttributeError(name)
         return self._raw.get(name)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"StrategyConfig({self._raw})"
 
 
@@ -62,13 +62,12 @@ class PolymarketConfig:
     relayer_api_key_address: str = ""
 
 
-INTERVAL_SECS = {"4h": 14400, "1h": 3600, "15m": 900, "5m": 300}
 
 
 class Config:
     """Bot configuration. Strategy sections auto-discovered from YAML keys."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.log_level: str = "INFO"
         self.max_workers: int = 10
         self.polymarket: PolymarketConfig = PolymarketConfig()
@@ -153,7 +152,9 @@ class Config:
         for scfg in self.strategies.values():
             if not scfg.enabled:
                 continue
-            contracts = scfg.get("contracts_per_trade") or 200  # 0 invalid per schema
+            contracts = scfg.get("contracts_per_trade")
+            if contracts is None:
+                contracts = 200
             by_interval: dict[str, int] = {}
             for m in scfg.markets:
                 if m.get("mode", "live") != "live":
@@ -172,7 +173,7 @@ class Config:
         return self.any_strategy_enabled()
 
 
-def parse_token_data(data):
+def parse_token_data(data: str | list) -> list:
     """Parse outcome_prices or token_ids that may be JSON strings or lists."""
     if isinstance(data, str):
         return json.loads(data)

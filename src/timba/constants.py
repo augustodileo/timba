@@ -21,6 +21,7 @@ POLYGON_CHAIN_ID = 137
 
 # ── Operational defaults ──
 DISCOVERY_INTERVAL_SEC = 240
+INTERVAL_SECS = {"4h": 14400, "1h": 3600, "15m": 900, "5m": 300}
 
 # ── Portfolio estimation ──
 CONCURRENT_PER_INTERVAL = {"5m": 2, "15m": 1, "1h": 1, "4h": 1}

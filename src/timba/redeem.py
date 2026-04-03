@@ -36,7 +36,7 @@ def _encode_redeem(condition_id: str) -> str:
     return data
 
 
-def check_needs_redeem(clob_client, token_id: str) -> bool:
+def check_needs_redeem(clob_client: object, token_id: str) -> bool:
     """Check if a token has a balance that needs redeeming."""
     try:
         balance = clob_client.get_token_balance(token_id)
@@ -45,7 +45,7 @@ def check_needs_redeem(clob_client, token_id: str) -> bool:
         return True  # assume yes if we can't check
 
 
-def redeem_position(relay_client, condition_id: str) -> bool:
+def redeem_position(relay_client: object, condition_id: str) -> bool:
     """Redeem a resolved position via the Relayer (gas-free).
 
     Returns True if transaction submitted successfully.
@@ -75,7 +75,7 @@ def redeem_position(relay_client, condition_id: str) -> bool:
         return False
 
 
-def create_relay_client(private_key: str, relayer_api_key: str, relayer_api_key_address: str):
+def create_relay_client(private_key: str, relayer_api_key: str, relayer_api_key_address: str) -> object:
     """Create a RelayClient using Relayer API key auth."""
     from py_builder_relayer_client.client import BuilderConfig, RelayClient
     from py_builder_signing_sdk.sdk_types import BuilderApiKeyCreds
@@ -91,7 +91,7 @@ def create_relay_client(private_key: str, relayer_api_key: str, relayer_api_key_
     api_key = relayer_api_key
     api_key_address = relayer_api_key_address
 
-    def _relayer_headers(method, request_path, body=None):
+    def _relayer_headers(method: str, request_path: str, body: str | None = None) -> dict[str, str]:
         return {
             "RELAYER_API_KEY": api_key,
             "RELAYER_API_KEY_ADDRESS": api_key_address,

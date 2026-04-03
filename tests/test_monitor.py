@@ -16,12 +16,49 @@ from timba.monitor import (
 )
 
 
+def _create_trades_db(db_path, trades):
+    """Helper: create a SQLite DB with trades table and insert trades."""
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""CREATE TABLE IF NOT EXISTS trades (
+        id INTEGER PRIMARY KEY, strategy TEXT, type TEXT, slug TEXT,
+        coin TEXT, interval TEXT, side TEXT, buy_price REAL,
+        contracts INTEGER, pnl REAL, sniped_at TEXT, resolved_at TEXT,
+        end_timestamp INTEGER, market_mode TEXT, skip_reason TEXT,
+        ticks_evaluated INTEGER, ev_id INTEGER, token_id TEXT,
+        redeemed INTEGER DEFAULT 0, order_id TEXT, min_price REAL,
+        midpoint REAL, extras TEXT, condition_id TEXT
+    )""")
+    for t in trades:
+        extras = json.dumps({k: v for k, v in t.items()
+                            if k not in ("id", "strategy", "type", "slug", "coin", "interval",
+                                         "side", "buy_price", "contracts", "pnl", "sniped_at",
+                                         "resolved_at", "end_timestamp", "market_mode",
+                                         "skip_reason", "ticks_evaluated", "ev_id", "token_id",
+                                         "redeemed", "min_price", "midpoint")})
+        conn.execute(
+            "INSERT INTO trades (id, strategy, type, slug, coin, interval, side, buy_price, "
+            "contracts, pnl, sniped_at, resolved_at, end_timestamp, market_mode, skip_reason, "
+            "ticks_evaluated, ev_id, token_id, redeemed, min_price, midpoint, extras) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (t.get("id"), t.get("strategy", "favorite"), t.get("type", ""),
+             t.get("slug", ""), t.get("coin", ""), t.get("interval", ""),
+             t.get("side", ""), t.get("buy_price", 0), t.get("contracts", 0),
+             t.get("pnl", 0), t.get("sniped_at", ""), t.get("resolved_at", ""),
+             t.get("end_timestamp"), t.get("market_mode", "paper"),
+             t.get("skip_reason", ""), t.get("ticks_evaluated", 0),
+             t.get("ev_id", 0), t.get("token_id", ""),
+             1 if t.get("redeemed") else 0,
+             t.get("min_price"), t.get("midpoint"),
+             extras),
+        )
+    conn.commit()
+    conn.close()
+
+
 @pytest.fixture
 def data_dir(tmp_path):
-    """Create a temp data dir with sample trades."""
-    fav_dir = tmp_path / "favorite"
-    fav_dir.mkdir()
-
+    """Create a temp data dir with sample trades in SQLite."""
     trades = [
         {"type": "paper_win", "strategy": "favorite", "slug": "btc-updown-5m-100",
          "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.99,
@@ -71,10 +108,7 @@ def data_dir(tmp_path):
          "token_id": "tok6", "redeemed": False},
     ]
 
-    with open(fav_dir / "trades_2026-03-29.jsonl", "w") as f:
-        for t in trades:
-            f.write(json.dumps(t) + "\n")
-
+    _create_trades_db(tmp_path / "bot.db", trades)
     return str(tmp_path)
 
 
@@ -100,15 +134,10 @@ class TestLoadStrategyTrades:
         trades = load_strategy_trades(data_dir, "nonexistent")
         assert trades == []
 
-    def test_skips_invalid_json_lines(self, tmp_path):
+    def test_returns_empty_for_no_db(self, tmp_path):
         from timba.monitor import load_strategy_trades
-        strat_dir = tmp_path / "favorite"
-        strat_dir.mkdir()
-        with open(strat_dir / "trades_2026-03-29.jsonl", "w") as f:
-            f.write("not json\n")
-            f.write(json.dumps({"type": "win", "slug": "test"}) + "\n")
         trades = load_strategy_trades(str(tmp_path), "favorite")
-        assert len(trades) == 1
+        assert trades == []
 
 
 class TestCalcPnl:
@@ -193,8 +222,6 @@ class TestFmtTime:
 class TestBuildOverviewWithLive:
     def test_with_live_trades(self, tmp_path):
         """Test overview with live (non-paper) trades to cover live section."""
-        fav_dir = tmp_path / "favorite"
-        fav_dir.mkdir()
         trades = [
             {"type": "win", "strategy": "favorite", "slug": "btc-updown-5m-100",
              "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.99,
@@ -219,9 +246,7 @@ class TestBuildOverviewWithLive:
              "market_mode": "live", "skip_reason": "below threshold",
              "ticks_evaluated": 5, "ev_id": 4, "id": 4},
         ]
-        with open(fav_dir / "trades_2026-03-29.jsonl", "w") as f:
-            for t in trades:
-                f.write(json.dumps(t) + "\n")
+        _create_trades_db(tmp_path / "bot.db", trades)
 
         state = {
             "code_version": "test",
@@ -644,3 +669,453 @@ class TestStrategyTableModes:
         out = _render_table(table)
         assert "Live Bets" in out
         assert "1W/0L" in out  # paper eth
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Coverage: monitor.py uncovered lines
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestLoadStrategyTradesExtras:
+    """Cover extras JSON decode error path in load_strategy_trades (lines 77-78)."""
+
+    def test_bad_extras_json_ignored(self, tmp_path):
+        """Trades with invalid extras JSON should still load (lines 77-78)."""
+        import sqlite3
+
+        from timba.monitor import load_strategy_trades
+
+        db_path = tmp_path / "bot.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""CREATE TABLE trades (
+            id INTEGER PRIMARY KEY, strategy TEXT, type TEXT, slug TEXT,
+            coin TEXT, interval TEXT, side TEXT, buy_price REAL,
+            contracts INTEGER, pnl REAL, sniped_at TEXT, resolved_at TEXT,
+            end_timestamp INTEGER, market_mode TEXT, skip_reason TEXT,
+            ticks_evaluated INTEGER, ev_id INTEGER, token_id TEXT,
+            redeemed INTEGER DEFAULT 0, order_id TEXT, min_price REAL,
+            midpoint REAL, extras TEXT, condition_id TEXT
+        )""")
+        conn.execute(
+            "INSERT INTO trades (id, strategy, type, slug, extras) "
+            "VALUES (1, 'favorite', 'win', 'btc-updown-5m-100', 'not-valid-json{{')"
+        )
+        conn.commit()
+        conn.close()
+
+        trades = load_strategy_trades(str(tmp_path), "favorite")
+        assert len(trades) == 1
+        assert trades[0]["type"] == "win"
+
+    def test_db_open_error_skipped(self, tmp_path):
+        """Corrupt DB files are skipped (lines 80-81)."""
+        from timba.monitor import load_strategy_trades
+
+        # Create a corrupt file
+        bad_db = tmp_path / "bot.db"
+        bad_db.write_text("this is not a database")
+
+        trades = load_strategy_trades(str(tmp_path), "favorite")
+        assert trades == []
+
+
+class TestBuildOverviewPnlRate:
+    """Cover _pnl_rate edge cases (lines 148, 156-158)."""
+
+    def test_pnl_rate_displayed_for_live(self, tmp_path):
+        """Live trades with elapsed time should show $/h rate (lines 148, 156-158)."""
+        from io import StringIO
+
+        from rich.console import Console
+
+        # Create trades with recent timestamps
+        trades = [
+            {"type": "win", "strategy": "favorite", "slug": "btc-updown-5m-100",
+             "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.90,
+             "contracts": 5, "pnl": 0.50, "sniped_at": "2026-04-01T00:00:00+00:00",
+             "resolved_at": "2026-04-01T00:05:00+00:00", "end_timestamp": 100,
+             "market_mode": "live", "skip_reason": "",
+             "ticks_evaluated": 5, "ev_id": 1, "id": 1},
+            {"type": "loss", "strategy": "favorite", "slug": "eth-updown-5m-200",
+             "coin": "eth", "interval": "5m", "side": "down", "buy_price": 0.90,
+             "contracts": 5, "pnl": -4.50, "sniped_at": "2026-04-01T01:00:00+00:00",
+             "resolved_at": "2026-04-01T01:05:00+00:00", "end_timestamp": 200,
+             "market_mode": "live", "skip_reason": "",
+             "ticks_evaluated": 3, "ev_id": 2, "id": 2},
+        ]
+        _create_trades_db(tmp_path / "bot.db", trades)
+
+        state = {
+            "code_version": "test", "portfolio": 100.0, "cash": 100.0,
+            "pending_redemption": 0, "strategies": {"favorite": {}},
+        }
+        panel = build_overview_and_trades(
+            state, state["strategies"], str(tmp_path), "main",
+            enabled_strategies={"favorite"},
+        )
+        buf = StringIO()
+        console = Console(file=buf, width=120)
+        console.print(panel)
+        text = buf.getvalue()
+        assert "Bets" in text
+
+
+class TestBuildOverviewWlLine:
+    """Cover _wl_line returning None for zero total (line 166)."""
+
+    def test_wl_line_zero_total(self, tmp_path):
+        """Strategy with zero bets/fails/skips should not crash (line 166)."""
+        # No trades at all — just an enabled strategy
+        state = {
+            "code_version": "test", "portfolio": 100.0, "cash": 100.0,
+            "pending_redemption": 0, "strategies": {"favorite": {}},
+        }
+        panel = build_overview_and_trades(
+            state, state["strategies"], str(tmp_path), "main",
+            enabled_strategies={"favorite"},
+        )
+        assert panel is not None
+
+
+class TestBuildOverviewPaperSkipNone:
+    """Cover paper section with skip_none trades (lines 198-201)."""
+
+    def test_paper_skip_none_shown(self, tmp_path):
+        """Paper section with only skip_none trades should show skip count (lines 198-201)."""
+        from io import StringIO
+
+        from rich.console import Console
+
+        trades = [
+            {"type": "skip_none", "strategy": "favorite", "slug": "btc-updown-5m-100",
+             "coin": "btc", "interval": "5m", "side": "", "buy_price": 0,
+             "contracts": 5, "pnl": 0, "sniped_at": "2026-04-01T00:00:00+00:00",
+             "resolved_at": "2026-04-01T00:05:00+00:00", "end_timestamp": 100,
+             "market_mode": "paper", "skip_reason": "window timeout",
+             "ticks_evaluated": 0, "ev_id": 0, "id": 1},
+        ]
+        _create_trades_db(tmp_path / "bot.db", trades)
+
+        state = {
+            "code_version": "test", "portfolio": 100.0, "cash": 100.0,
+            "pending_redemption": 0, "strategies": {"favorite": {}},
+        }
+        panel = build_overview_and_trades(
+            state, state["strategies"], str(tmp_path), "main",
+            enabled_strategies={"favorite"},
+        )
+        buf = StringIO()
+        console = Console(file=buf, width=120)
+        console.print(panel)
+        text = buf.getvalue()
+        assert "Skips" in text
+        assert "1S" in text
+
+
+class TestBuildOverviewPaperFailsAndSkipsWL:
+    """Cover paper_fail and paper_skip_w + paper_skip_l + skip_s branches (lines 374-375, 382-390)."""
+
+    def test_paper_fails_shown(self, tmp_path):
+        """Paper section with fail trades should show fail line."""
+        from io import StringIO
+
+        from rich.console import Console
+
+        trades = [
+            {"type": "paper_win", "strategy": "favorite", "slug": "btc-updown-5m-100",
+             "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.95,
+             "contracts": 5, "pnl": 0.25, "sniped_at": "2026-04-01T00:00:00+00:00",
+             "resolved_at": "2026-04-01T00:05:00+00:00", "end_timestamp": 100,
+             "market_mode": "paper", "id": 1},
+            {"type": "fail_win", "strategy": "favorite", "slug": "btc-updown-5m-200",
+             "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.99,
+             "contracts": 5, "pnl": 0, "sniped_at": "2026-04-01T00:10:00+00:00",
+             "market_mode": "paper", "id": 2},
+            {"type": "fail_loss", "strategy": "favorite", "slug": "btc-updown-5m-300",
+             "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.99,
+             "contracts": 5, "pnl": 0, "sniped_at": "2026-04-01T00:15:00+00:00",
+             "market_mode": "paper", "id": 3},
+            {"type": "skip_win", "strategy": "favorite", "slug": "btc-updown-5m-400",
+             "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.96,
+             "contracts": 5, "pnl": 0, "sniped_at": "2026-04-01T00:20:00+00:00",
+             "market_mode": "paper", "id": 4},
+            {"type": "skip_loss", "strategy": "favorite", "slug": "btc-updown-5m-500",
+             "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.96,
+             "contracts": 5, "pnl": 0, "sniped_at": "2026-04-01T00:25:00+00:00",
+             "market_mode": "paper", "id": 5},
+            {"type": "skip_none", "strategy": "favorite", "slug": "btc-updown-5m-600",
+             "coin": "btc", "interval": "5m", "side": "", "buy_price": 0,
+             "contracts": 5, "pnl": 0, "sniped_at": "2026-04-01T00:30:00+00:00",
+             "market_mode": "paper", "id": 6},
+        ]
+        _create_trades_db(tmp_path / "bot.db", trades)
+
+        state = {
+            "code_version": "test", "portfolio": 100.0, "cash": 100.0,
+            "pending_redemption": 0, "strategies": {"favorite": {}},
+        }
+        panel = build_overview_and_trades(
+            state, state["strategies"], str(tmp_path), "main",
+            enabled_strategies={"favorite"},
+        )
+        buf = StringIO()
+        console = Console(file=buf, width=120)
+        console.print(panel)
+        text = buf.getvalue()
+        assert "Fails" in text
+        assert "Skips" in text
+        assert "1S" in text  # skip_none count
+
+
+class TestBuildStateFromApi:
+    """Cover _build_state_from_api paths (lines 374-375, 382-390)."""
+
+    def test_api_running_returns_state(self, tmp_path):
+        """When bot API is running, use its state (lines 374-375)."""
+        from unittest.mock import MagicMock, patch
+
+        from timba.monitor import _build_state_from_api
+
+        with patch("timba.client.BotClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.is_running.return_value = True
+            mock_client.status.return_value = {
+                "state": {"portfolio": 200.0, "cash": 150.0},
+                "version": "v3.0",
+            }
+            mock_client_cls.return_value = mock_client
+
+            state = _build_state_from_api(str(tmp_path))
+            assert state["portfolio"] == 200.0
+            assert state["code_version"] == "v3.0"
+
+    def test_api_exception_falls_back_to_sqlite(self, tmp_path):
+        """When bot API raises, fall back to SQLite state (lines 374-375)."""
+        import sqlite3
+        from unittest.mock import patch
+
+        from timba.monitor import _build_state_from_api
+
+        # Create a DB with some trades
+        db_path = tmp_path / "bot.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""CREATE TABLE trades (
+            id INTEGER PRIMARY KEY, type TEXT, pnl REAL,
+            strategy TEXT, slug TEXT, side TEXT, buy_price REAL,
+            contracts INTEGER, sniped_at TEXT, resolved_at TEXT,
+            end_timestamp INTEGER, market_mode TEXT, skip_reason TEXT,
+            ticks_evaluated INTEGER, ev_id INTEGER, token_id TEXT,
+            redeemed INTEGER DEFAULT 0, order_id TEXT, min_price REAL,
+            midpoint REAL, extras TEXT, condition_id TEXT, coin TEXT, interval TEXT
+        )""")
+        conn.execute("INSERT INTO trades (id, type, pnl) VALUES (1, 'win', 5.0)")
+        conn.execute("INSERT INTO trades (id, type, pnl) VALUES (2, 'loss', -2.0)")
+        conn.commit()
+        conn.close()
+
+        with patch("timba.client.BotClient") as mock_client_cls:
+            mock_client_cls.return_value.is_running.side_effect = Exception("connection refused")
+
+            state = _build_state_from_api(str(tmp_path))
+            assert state["code_version"] == "offline"
+            assert state["total_pnl"] == 3.0
+
+    def test_offline_corrupt_db(self, tmp_path):
+        """Offline mode with corrupt DB should still return state (lines 382-390)."""
+        from unittest.mock import patch
+
+        from timba.monitor import _build_state_from_api
+
+        # Create corrupt DB
+        (tmp_path / "bot.db").write_text("not a database")
+
+        with patch("timba.client.BotClient") as mock_client_cls:
+            mock_client_cls.return_value.is_running.return_value = False
+
+            state = _build_state_from_api(str(tmp_path))
+            assert state["code_version"] == "offline"
+
+    def test_offline_no_db(self, tmp_path):
+        """Offline mode with no DB returns defaults."""
+        from unittest.mock import patch
+
+        from timba.monitor import _build_state_from_api
+
+        with patch("timba.client.BotClient") as mock_client_cls:
+            mock_client_cls.return_value.is_running.return_value = False
+
+            state = _build_state_from_api(str(tmp_path))
+            assert state["code_version"] == "offline"
+            assert state["portfolio"] == 0
+
+
+class TestMonitorRunConfigEdgeCases:
+    """Cover run() config parsing edge cases (lines 417, 432, 435)."""
+
+    @patch("timba.client.BotClient")
+    def test_config_with_reserved_keys_skipped(self, mock_client_cls, tmp_path, capsys):
+        """Reserved keys in config are skipped (line 417)."""
+        mock_client_cls.return_value.is_running.return_value = False
+
+        config = {
+            "log_level": "debug",
+            "portfolio": {"initial": 100},
+            "polymarket": {"api_key": "test"},
+            "favorite": {
+                "enabled": True,
+                "markets": [
+                    {"coin": "btc", "interval": "5m", "mode": "paper"},
+                ],
+            },
+        }
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(yaml.dump(config))
+
+        run(str(tmp_path), str(cfg_path), "test")
+
+    @patch("timba.client.BotClient")
+    def test_config_disabled_strategy_not_shown(self, mock_client_cls, tmp_path, capsys):
+        """Disabled strategies are not rendered (lines 432, 435)."""
+        mock_client_cls.return_value.is_running.return_value = False
+
+        config = {
+            "favorite": {
+                "enabled": True,
+                "markets": [
+                    {"coin": "btc", "interval": "5m", "mode": "paper"},
+                ],
+            },
+            "other": {
+                "enabled": False,
+                "markets": [
+                    {"coin": "eth", "interval": "5m", "mode": "paper"},
+                ],
+            },
+        }
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(yaml.dump(config))
+
+        run(str(tmp_path), str(cfg_path), "test")
+
+    @patch("timba.client.BotClient")
+    def test_config_non_dict_strategy_skipped(self, mock_client_cls, tmp_path, capsys):
+        """Non-dict strategy values are skipped (line 435)."""
+        mock_client_cls.return_value.is_running.return_value = False
+
+        config = {
+            "favorite": {
+                "enabled": True,
+                "markets": [
+                    {"coin": "btc", "interval": "5m", "mode": "paper"},
+                ],
+            },
+            "bad_strategy": "just a string, not a dict",
+        }
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text(yaml.dump(config))
+
+        run(str(tmp_path), str(cfg_path), "test")
+
+
+class TestPnlRateEdgeCases:
+    """Cover _pnl_rate internal function edge cases (lines 148, 156-158)."""
+
+    def test_pnl_rate_no_matching_trades(self, tmp_path):
+        """When no trades match the filter, _pnl_rate returns '' (line 148)."""
+
+        # Create strategy with live bets but with sniped_at = "" (empty)
+        trades = [
+            {"type": "win", "strategy": "favorite", "slug": "btc-updown-5m-100",
+             "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.90,
+             "contracts": 5, "pnl": 0.50, "sniped_at": "",
+             "resolved_at": "", "end_timestamp": 100,
+             "market_mode": "live", "skip_reason": "",
+             "ticks_evaluated": 5, "ev_id": 1, "id": 1},
+            {"type": "loss", "strategy": "favorite", "slug": "eth-updown-5m-200",
+             "coin": "eth", "interval": "5m", "side": "down", "buy_price": 0.90,
+             "contracts": 5, "pnl": -4.50, "sniped_at": "",
+             "resolved_at": "", "end_timestamp": 200,
+             "market_mode": "live", "skip_reason": "",
+             "ticks_evaluated": 3, "ev_id": 2, "id": 2},
+        ]
+        _create_trades_db(tmp_path / "bot.db", trades)
+
+        state = {
+            "code_version": "test", "portfolio": 100.0, "cash": 100.0,
+            "pending_redemption": 0, "strategies": {"favorite": {}},
+        }
+        panel = build_overview_and_trades(
+            state, state["strategies"], str(tmp_path), "main",
+            enabled_strategies={"favorite"},
+        )
+        assert panel is not None
+
+    def test_pnl_rate_bad_timestamp(self, tmp_path):
+        """When sniped_at is invalid, _pnl_rate catches ValueError (lines 156-158)."""
+
+        trades = [
+            {"type": "win", "strategy": "favorite", "slug": "btc-updown-5m-100",
+             "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.90,
+             "contracts": 5, "pnl": 0.50, "sniped_at": "not-a-date",
+             "resolved_at": "not-a-date", "end_timestamp": 100,
+             "market_mode": "live", "skip_reason": "",
+             "ticks_evaluated": 5, "ev_id": 1, "id": 1},
+            {"type": "loss", "strategy": "favorite", "slug": "eth-updown-5m-200",
+             "coin": "eth", "interval": "5m", "side": "down", "buy_price": 0.90,
+             "contracts": 5, "pnl": -4.50, "sniped_at": "not-a-date",
+             "resolved_at": "not-a-date", "end_timestamp": 200,
+             "market_mode": "live", "skip_reason": "",
+             "ticks_evaluated": 3, "ev_id": 2, "id": 2},
+        ]
+        _create_trades_db(tmp_path / "bot.db", trades)
+
+        state = {
+            "code_version": "test", "portfolio": 100.0, "cash": 100.0,
+            "pending_redemption": 0, "strategies": {"favorite": {}},
+        }
+        panel = build_overview_and_trades(
+            state, state["strategies"], str(tmp_path), "main",
+            enabled_strategies={"favorite"},
+        )
+        assert panel is not None
+
+
+class TestPaperSkipWlNoSkipNone:
+    """Cover line 199: paper skips with W/L but no skip_none."""
+
+    def test_paper_skips_without_skip_none(self, tmp_path):
+        """Paper section with skip_win + skip_loss but 0 skip_none -> line 199."""
+        from io import StringIO
+
+        from rich.console import Console
+
+        trades = [
+            {"type": "skip_win", "strategy": "favorite", "slug": "btc-updown-5m-100",
+             "coin": "btc", "interval": "5m", "side": "up", "buy_price": 0.96,
+             "contracts": 5, "pnl": 0, "sniped_at": "2026-04-01T00:00:00+00:00",
+             "market_mode": "paper", "skip_reason": "below threshold",
+             "ticks_evaluated": 5, "ev_id": 1, "id": 1},
+            {"type": "skip_loss", "strategy": "favorite", "slug": "btc-updown-5m-200",
+             "coin": "btc", "interval": "5m", "side": "down", "buy_price": 0.96,
+             "contracts": 5, "pnl": 0, "sniped_at": "2026-04-01T00:05:00+00:00",
+             "market_mode": "paper", "skip_reason": "below threshold",
+             "ticks_evaluated": 5, "ev_id": 2, "id": 2},
+        ]
+        _create_trades_db(tmp_path / "bot.db", trades)
+
+        state = {
+            "code_version": "test", "portfolio": 100.0, "cash": 100.0,
+            "pending_redemption": 0, "strategies": {"favorite": {}},
+        }
+        panel = build_overview_and_trades(
+            state, state["strategies"], str(tmp_path), "main",
+            enabled_strategies={"favorite"},
+        )
+        buf = StringIO()
+        console = Console(file=buf, width=120)
+        console.print(panel)
+        text = buf.getvalue()
+        assert "Skips" in text
+        assert "1W/1L" in text
+        # Should NOT have "+S" since skip_s == 0
+        assert "+0S" not in text

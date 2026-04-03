@@ -12,9 +12,13 @@ from timba.trader import Trader
 
 @pytest.fixture(autouse=True)
 def _reset_db():
-    """Reset db module state after each test to prevent cross-test pollution."""
+    """Reset db module state and logging after each test to prevent cross-test pollution."""
     yield
     db.reset()
+    # Clean up any logging handlers added during tests (e.g. CLI tests add LogFileHandler)
+    import logging
+    timba_logger = logging.getLogger("timba")
+    timba_logger.handlers = [h for h in timba_logger.handlers if not hasattr(h, 'path')]
 
 
 @pytest.fixture

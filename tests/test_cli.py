@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import os
@@ -6,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from timba.cli import _banner, _check_geoblock, _check_wallet, _detect_env, _print_market_table, main
+from timba.cli import _banner, _check_geoblock, _check_wallet, _detect_env, _print_market_table, cmd_config, main
 from timba.config import Config
 from timba.version import get_version
 
@@ -807,3 +808,664 @@ class TestVersion:
         with patch.dict("sys.modules", {"timba._version": None}):
             v = get_version()
             assert v == "dev"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Coverage: cli.py command handlers — cmd_start, cmd_status (running),
+# cmd_stop (running), cmd_monitor
+# ══════════════════════════════════════════════════════════════════════
+
+
+def _valid_config_file(tmp_path):
+    """Create a valid config file and return its path."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("""
+favorite:
+  enabled: true
+  min_price: 0.95
+  min_signal_chg: 0.05
+  contracts_per_trade: 5
+  markets:
+    - coin: btc
+      interval: 5m
+      mode: paper
+      entry_window_sec: 10
+      close_window_sec: 3
+""")
+    return cfg_file
+
+
+class TestCmdStartFlow:
+    """Cover cmd_start lines 439-517: the main startup sequence."""
+
+    def test_start_full_flow(self, tmp_path, monkeypatch):
+        """cmd_start loads config, connects CLOB, inits DB, runs trader."""
+        cfg_file = _valid_config_file(tmp_path)
+        monkeypatch.setenv("TIMBA_HOME", str(tmp_path))
+        monkeypatch.setenv("BOT_ENV", "testenv")
+        monkeypatch.setenv("POLYMARKET_PRIVATE_KEY", "0xtest_key")
+        (tmp_path / ".env").write_text("")
+
+        from timba.cli import cmd_start
+        args = MagicMock()
+        args.config = str(cfg_file)
+        args.port = 9999
+        args.log_level = "WARNING"
+
+        mock_clob_instance = MagicMock()
+        mock_clob_instance.create_or_derive_api_creds.return_value = MagicMock()
+        mock_clob_instance.get_usdc_balance.return_value = 100.0
+
+        mock_trader_instance = MagicMock()
+
+        mock_api_server = MagicMock()
+
+        with patch("polymarket_apis.PolymarketClobClient", return_value=mock_clob_instance), \
+             patch("timba.cli._banner", return_value="Timba\n"), \
+             patch("timba.cli._print_market_table"), \
+             patch("timba.cli._detect_env", return_value="testenv"), \
+             patch("timba.cli._data_dir", return_value=tmp_path / "data" / "testenv"), \
+             patch("timba.db.init"), \
+             patch("timba.ticks.init_ids"), \
+             patch("timba.state.init_trade_ids"), \
+             patch("timba.db.get_pending_redemption", return_value=0), \
+             patch("timba.reconcile.reconcile_startup"), \
+             patch("timba.trader.Trader", return_value=mock_trader_instance) as mock_trader_cls, \
+             patch("timba.server.start_api_server", return_value=mock_api_server), \
+             patch("timba.cli._write_bot_json"), \
+             patch("timba.cli._remove_bot_json"), \
+             patch("timba.health.LogFileHandler", return_value=MagicMock()), \
+             patch("signal.signal"), \
+             patch("atexit.register"):
+            # Make data dir exist
+            (tmp_path / "data" / "testenv").mkdir(parents=True, exist_ok=True)
+            cmd_start(args)
+
+            # Verify trader was instantiated and run was called
+            mock_trader_cls.assert_called_once()
+            mock_trader_instance.run.assert_called_once()
+            mock_api_server.shutdown.assert_called_once()
+
+    def test_start_no_private_key_exits(self, tmp_path, monkeypatch):
+        """cmd_start without POLYMARKET_PRIVATE_KEY should exit."""
+        cfg_file = _valid_config_file(tmp_path)
+        monkeypatch.setenv("TIMBA_HOME", str(tmp_path))
+        monkeypatch.setenv("BOT_ENV", "testenv")
+        monkeypatch.delenv("POLYMARKET_PRIVATE_KEY", raising=False)
+        (tmp_path / ".env").write_text("")
+
+        from timba.cli import cmd_start
+        args = MagicMock()
+        args.config = str(cfg_file)
+        args.port = 8080
+        args.log_level = None
+
+        with patch("timba.cli._banner", return_value="Timba\n"), \
+             patch("timba.cli._print_market_table"), \
+             patch("timba.cli._detect_env", return_value="testenv"), \
+             patch("timba.cli._data_dir", return_value=tmp_path / "data" / "testenv"):
+            (tmp_path / "data" / "testenv").mkdir(parents=True, exist_ok=True)
+            with pytest.raises(SystemExit):
+                cmd_start(args)
+
+    def test_start_clob_connection_fails(self, tmp_path, monkeypatch):
+        """cmd_start with CLOB connection failure should exit."""
+        cfg_file = _valid_config_file(tmp_path)
+        monkeypatch.setenv("TIMBA_HOME", str(tmp_path))
+        monkeypatch.setenv("BOT_ENV", "testenv")
+        monkeypatch.setenv("POLYMARKET_PRIVATE_KEY", "0xtest_key")
+        (tmp_path / ".env").write_text("")
+
+        from timba.cli import cmd_start
+        args = MagicMock()
+        args.config = str(cfg_file)
+        args.port = 8080
+        args.log_level = None
+
+        with patch("polymarket_apis.PolymarketClobClient", side_effect=Exception("connection failed")), \
+             patch("timba.cli._banner", return_value="Timba\n"), \
+             patch("timba.cli._print_market_table"), \
+             patch("timba.cli._detect_env", return_value="testenv"), \
+             patch("timba.cli._data_dir", return_value=tmp_path / "data" / "testenv"):
+            (tmp_path / "data" / "testenv").mkdir(parents=True, exist_ok=True)
+            with pytest.raises(SystemExit):
+                cmd_start(args)
+
+    def test_start_auto_init_when_not_initialized(self, tmp_path, monkeypatch):
+        """cmd_start auto-runs cmd_init when no .env and no explicit config."""
+        monkeypatch.setenv("TIMBA_HOME", str(tmp_path))
+        monkeypatch.setenv("BOT_ENV", "testenv")
+        monkeypatch.delenv("POLYMARKET_PRIVATE_KEY", raising=False)
+
+        from timba.cli import cmd_start
+        args = MagicMock()
+        args.config = None  # no explicit config -> triggers auto-init
+        args.port = 8080
+        args.log_level = None
+
+        with patch("timba.cli.cmd_init") as mock_init, \
+             patch("timba.cli._ensure_initialized", return_value=False), \
+             patch("timba.cli._resolve_config") as mock_resolve:
+            # After init, _resolve_config will be called; make it exit to stop the flow
+            mock_resolve.side_effect = SystemExit(1)
+            with pytest.raises(SystemExit):
+                cmd_start(args)
+            mock_init.assert_called_once()
+
+    def test_start_invalid_config_exits(self, tmp_path, monkeypatch):
+        """cmd_start with invalid config should exit with validation error."""
+        cfg_file = tmp_path / "bad.yaml"
+        cfg_file.write_text("favorite:\n  typo_key: 123\n")
+        monkeypatch.setenv("TIMBA_HOME", str(tmp_path))
+        monkeypatch.setenv("BOT_ENV", "testenv")
+        (tmp_path / ".env").write_text("")
+
+        from timba.cli import cmd_start
+        args = MagicMock()
+        args.config = str(cfg_file)
+        args.port = 8080
+        args.log_level = None
+
+        with pytest.raises(SystemExit):
+            cmd_start(args)
+
+
+class TestCmdStatusRunning:
+    """Cover cmd_status lines 551-610: successful status query."""
+
+    def test_status_with_live_and_paper_trades(self, capsys):
+        from timba.cli import cmd_status
+        args = MagicMock()
+        args.host = "127.0.0.1"
+        args.port = 8080
+
+        mock_status = {
+            "health": {"status": "ok", "uptime_seconds": 3700},
+            "state": {"cash": 95.0, "portfolio": 100.0},
+            "version": "1.0.0",
+        }
+        mock_trades = [
+            {"type": "win", "strategy": "favorite", "buy_price": 0.95,
+             "contracts": 5, "pnl": 0.25, "side": "up"},
+            {"type": "loss", "strategy": "favorite", "buy_price": 0.90,
+             "contracts": 5, "pnl": -4.50, "side": "up"},
+            {"type": "paper_win", "strategy": "favorite", "buy_price": 0.80,
+             "contracts": 5, "pnl": 1.0, "side": "up"},
+            {"type": "paper_loss", "strategy": "favorite", "buy_price": 0.85,
+             "contracts": 5, "pnl": -4.25, "side": "down"},
+            {"type": "fail_win", "strategy": "favorite", "buy_price": 0.70,
+             "contracts": 5, "pnl": 0, "side": "up"},
+            {"type": "fail_loss", "strategy": "favorite", "buy_price": 0.75,
+             "contracts": 5, "pnl": 0, "side": "down"},
+            {"type": "skip_win", "strategy": "favorite", "buy_price": 0.60,
+             "contracts": 5, "pnl": 0, "side": "up"},
+            {"type": "skip_loss", "strategy": "favorite", "buy_price": 0.65,
+             "contracts": 5, "pnl": 0, "side": "down"},
+            {"type": "skip_none", "strategy": "favorite", "buy_price": 0,
+             "contracts": 0, "pnl": 0, "side": ""},
+        ]
+
+        with patch("timba.client.BotClient") as mock_cls:
+            client = mock_cls.return_value
+            client.is_running.return_value = True
+            client.status.return_value = mock_status
+            client.trades.return_value = mock_trades
+
+            cmd_status(args)
+
+        out = capsys.readouterr().out
+        assert "Version: 1.0.0" in out
+        assert "$95.00" in out
+        assert "FAVORITE" in out
+        assert "Live" in out
+        assert "Paper" in out
+        assert "Fails:" in out
+        assert "Skips:" in out
+
+    def test_status_api_error(self, capsys):
+        from timba.cli import cmd_status
+        args = MagicMock()
+        args.host = "127.0.0.1"
+        args.port = 8080
+
+        with patch("timba.client.BotClient") as mock_cls:
+            client = mock_cls.return_value
+            client.is_running.return_value = True
+            client.status.side_effect = Exception("connection reset")
+
+            with pytest.raises(SystemExit):
+                cmd_status(args)
+
+        err = capsys.readouterr().err
+        assert "connection reset" in err
+
+
+class TestCmdStopRunning:
+    """Cover cmd_stop lines 522-536: successful stop command."""
+
+    def test_stop_success(self, capsys):
+        from timba.cli import cmd_stop
+        args = MagicMock()
+        args.host = "127.0.0.1"
+        args.port = 8080
+
+        with patch("timba.client.BotClient") as mock_cls:
+            client = mock_cls.return_value
+            client.is_running.return_value = True
+            client.stop.return_value = {"status": "shutting_down"}
+
+            cmd_stop(args)
+
+        out = capsys.readouterr().out
+        assert "Stop signal sent" in out
+        assert "shutting_down" in out
+
+    def test_stop_api_error(self, capsys):
+        from timba.cli import cmd_stop
+        args = MagicMock()
+        args.host = "127.0.0.1"
+        args.port = 8080
+
+        with patch("timba.client.BotClient") as mock_cls:
+            client = mock_cls.return_value
+            client.is_running.return_value = True
+            client.stop.side_effect = Exception("timeout")
+
+            with pytest.raises(SystemExit):
+                cmd_stop(args)
+
+        err = capsys.readouterr().err
+        assert "timeout" in err
+
+
+class TestCmdMonitor:
+    """Cover cmd_monitor lines 615-918: the live dashboard render loop."""
+
+    def test_monitor_not_running(self, capsys):
+        """Monitor renders 'not running' panel when bot is down."""
+        from timba.cli import cmd_monitor
+        args = MagicMock()
+        args.host = "127.0.0.1"
+        args.port = 8080
+        args.interval = 1
+
+        with patch("timba.client.BotClient") as mock_cls, \
+             patch("rich.live.Live") as mock_live_cls:
+            client = mock_cls.return_value
+            client.is_running.return_value = False
+
+            # Make the Live context manager raise KeyboardInterrupt to exit
+            mock_live_cls.return_value.__enter__ = MagicMock(side_effect=KeyboardInterrupt)
+            mock_live_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+            cmd_monitor(args)
+            # Should not crash
+
+    def test_monitor_running_with_trades(self):
+        """Monitor renders full dashboard with trade data."""
+        from timba.cli import cmd_monitor
+        args = MagicMock()
+        args.host = "127.0.0.1"
+        args.port = 8080
+        args.interval = 1
+
+        mock_status = {
+            "health": {"status": "ok", "uptime_seconds": 3600},
+            "state": {"cash": 95.0, "portfolio": 100.0, "pending_redemption": 1.5},
+            "version": "1.0.0",
+            "strategies": {
+                "favorite": {
+                    "markets": [
+                        {"coin": "btc", "interval": "5m", "mode": "paper"},
+                    ],
+                },
+            },
+        }
+        mock_trades = [
+            {"type": "paper_win", "strategy": "favorite", "slug": "btc-updown-5m-100",
+             "buy_price": 0.95, "contracts": 5, "pnl": 0.25, "side": "up",
+             "sniped_at": "2026-03-26T10:00:00+00:00",
+             "resolved_at": "2026-03-26T10:05:00+00:00"},
+            {"type": "paper_loss", "strategy": "favorite", "slug": "btc-updown-5m-101",
+             "buy_price": 0.90, "contracts": 5, "pnl": -4.50, "side": "up",
+             "sniped_at": "2026-03-26T10:10:00+00:00",
+             "resolved_at": "2026-03-26T10:15:00+00:00"},
+        ]
+
+        with patch("timba.client.BotClient") as mock_cls, \
+             patch("rich.live.Live") as mock_live_cls:
+            client = mock_cls.return_value
+            client.is_running.return_value = True
+            client.status.return_value = mock_status
+            client.trades.return_value = mock_trades
+            client.logs.return_value = [
+                "10:00:00 INFO     tick",
+                "10:01:00 WARNING  stale",
+                "10:02:00 ERROR    boom",
+            ]
+
+            # Make the Live context manager raise KeyboardInterrupt immediately
+            mock_live_cls.return_value.__enter__ = MagicMock(side_effect=KeyboardInterrupt)
+            mock_live_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+            cmd_monitor(args)
+            # Should not crash
+
+    def test_monitor_api_error(self):
+        """Monitor handles API errors gracefully."""
+        from timba.cli import cmd_monitor
+        args = MagicMock()
+        args.host = "127.0.0.1"
+        args.port = 8080
+        args.interval = 1
+
+        with patch("timba.client.BotClient") as mock_cls, \
+             patch("rich.live.Live") as mock_live_cls:
+            client = mock_cls.return_value
+            client.is_running.return_value = True
+            client.status.side_effect = Exception("connection refused")
+
+            mock_live_cls.return_value.__enter__ = MagicMock(side_effect=KeyboardInterrupt)
+            mock_live_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+            cmd_monitor(args)
+
+
+class TestCmdStartLogLevelPriority:
+    """Cover log level priority: CLI flag > env var > config.yaml."""
+
+    def test_log_level_from_env_var(self, tmp_path, monkeypatch):
+        """LOG_LEVEL env var is used when no CLI flag."""
+        cfg_file = _valid_config_file(tmp_path)
+        monkeypatch.setenv("TIMBA_HOME", str(tmp_path))
+        monkeypatch.setenv("BOT_ENV", "testenv")
+        monkeypatch.setenv("POLYMARKET_PRIVATE_KEY", "0xtest_key")
+        monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+        (tmp_path / ".env").write_text("")
+
+        from timba.cli import cmd_start
+        args = MagicMock()
+        args.config = str(cfg_file)
+        args.port = 8080
+        args.log_level = None  # no CLI flag
+
+        mock_clob = MagicMock()
+        mock_clob.create_or_derive_api_creds.return_value = MagicMock()
+
+        with patch("polymarket_apis.PolymarketClobClient", return_value=mock_clob), \
+             patch("timba.cli._banner", return_value="Timba\n"), \
+             patch("timba.cli._print_market_table"), \
+             patch("timba.cli._detect_env", return_value="testenv"), \
+             patch("timba.cli._data_dir", return_value=tmp_path / "data" / "testenv"), \
+             patch("timba.cli._setup_logging") as mock_log, \
+             patch("timba.db.init"), \
+             patch("timba.ticks.init_ids"), \
+             patch("timba.state.init_trade_ids"), \
+             patch("timba.db.get_pending_redemption", return_value=0), \
+             patch("timba.reconcile.reconcile_startup"), \
+             patch("timba.trader.Trader") as mock_trader_cls, \
+             patch("timba.server.start_api_server", return_value=MagicMock()), \
+             patch("timba.cli._write_bot_json"), \
+             patch("timba.cli._remove_bot_json"), \
+             patch("timba.health.LogFileHandler", return_value=MagicMock()), \
+             patch("signal.signal"), \
+             patch("atexit.register"):
+            (tmp_path / "data" / "testenv").mkdir(parents=True, exist_ok=True)
+            mock_trader_cls.return_value = MagicMock()
+            cmd_start(args)
+            # Should use LOG_LEVEL env var since CLI flag is None
+            mock_log.assert_called_once_with("DEBUG")
+
+
+class TestCmdMonitorLiveTradesSection:
+    """Cover the monitor render function branches for live vs paper trade lists."""
+
+    def test_monitor_with_live_and_paper_trades(self):
+        """Monitor renders both live and paper recent trade sections."""
+        from timba.cli import cmd_monitor
+        args = MagicMock()
+        args.host = "127.0.0.1"
+        args.port = 8080
+        args.interval = 1
+
+        mock_status = {
+            "health": {"status": "ok", "uptime_seconds": 7200},
+            "state": {"cash": 90.0, "portfolio": 100.0, "pending_redemption": 0},
+            "version": "1.0.0",
+            "strategies": {
+                "favorite": {
+                    "markets": [
+                        {"coin": "btc", "interval": "5m", "mode": "live"},
+                        {"coin": "eth", "interval": "5m", "mode": "paper"},
+                    ],
+                },
+            },
+        }
+        mock_trades = [
+            {"type": "win", "strategy": "favorite", "slug": "btc-updown-5m-100",
+             "buy_price": 0.95, "contracts": 5, "pnl": 0.25, "side": "up",
+             "sniped_at": "2026-03-26T10:00:00+00:00",
+             "resolved_at": "2026-03-26T10:05:00+00:00",
+             "market_mode": "live"},
+            {"type": "loss", "strategy": "favorite", "slug": "btc-updown-5m-101",
+             "buy_price": 0.90, "contracts": 5, "pnl": -4.50, "side": "down",
+             "sniped_at": "2026-03-26T10:10:00+00:00",
+             "resolved_at": "2026-03-26T10:15:00+00:00",
+             "market_mode": "live"},
+            {"type": "paper_win", "strategy": "favorite", "slug": "eth-updown-5m-200",
+             "buy_price": 0.85, "contracts": 5, "pnl": 0.75, "side": "up",
+             "sniped_at": "2026-03-26T10:00:00+00:00",
+             "resolved_at": "2026-03-26T10:05:00+00:00",
+             "market_mode": "paper"},
+            {"type": "skip_win", "strategy": "favorite", "slug": "btc-updown-5m-102",
+             "buy_price": 0, "contracts": 0, "pnl": 0, "side": "up",
+             "market_mode": "live"},
+            {"type": "skip_loss", "strategy": "favorite", "slug": "eth-updown-5m-201",
+             "buy_price": 0, "contracts": 0, "pnl": 0, "side": "down",
+             "market_mode": "paper"},
+            {"type": "fail_win", "strategy": "favorite", "slug": "btc-updown-5m-103",
+             "buy_price": 0.70, "contracts": 5, "pnl": 0, "side": "up",
+             "market_mode": "live"},
+            {"type": "fail_loss", "strategy": "favorite", "slug": "eth-updown-5m-202",
+             "buy_price": 0.75, "contracts": 5, "pnl": 0, "side": "down",
+             "market_mode": "paper"},
+            {"type": "skip_none", "strategy": "favorite", "slug": "btc-updown-5m-104",
+             "buy_price": 0, "contracts": 0, "pnl": 0, "side": "",
+             "market_mode": "paper"},
+        ]
+
+        with patch("timba.client.BotClient") as mock_cls, \
+             patch("rich.live.Live") as mock_live_cls:
+            client = mock_cls.return_value
+            client.is_running.return_value = True
+            client.status.return_value = mock_status
+            client.trades.return_value = mock_trades
+            client.logs.return_value = []
+
+            mock_live_cls.return_value.__enter__ = MagicMock(side_effect=KeyboardInterrupt)
+            mock_live_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+            cmd_monitor(args)
+
+
+class TestCmdInitExistingOverwrite:
+    """Cover cmd_init with existing .env and user choosing to overwrite."""
+
+    def test_existing_env_overwrite(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("TIMBA_HOME", str(tmp_path))
+        env_file = tmp_path / ".env"
+        env_file.write_text("OLD=value\n")
+        from timba.cli import cmd_init
+        # First prompt is "Overwrite? [y/N]" -> "y", then getpass + input for credentials
+        with patch("builtins.input", side_effect=["y", "0xnewfunder"]), \
+             patch("timba.cli.getpass.getpass", return_value="0xnewkey"):
+            args = MagicMock()
+            cmd_init(args)
+        content = env_file.read_text()
+        assert "0xnewkey" in content
+        assert "0xnewfunder" in content
+
+
+class TestPrintMarketTableModes:
+    """Cover _print_market_table with various market modes."""
+
+    def test_live_and_off_modes(self, capsys):
+        cfg = Config()
+        from timba.config import StrategyConfig
+        cfg.strategies["favorite"] = StrategyConfig({
+            "enabled": True,
+            "markets": [
+                {"coin": "btc", "interval": "5m", "mode": "live"},
+                {"coin": "btc", "interval": "15m", "mode": "off"},
+                {"coin": "eth", "interval": "5m", "mode": "paper"},
+            ],
+        })
+        _print_market_table(cfg)
+        out = capsys.readouterr().out
+        assert "LIVE" in out
+        assert "OFF" in out
+        assert "PPR" in out
+
+    def test_portfolio_display(self, capsys):
+        cfg = Config()
+        from timba.config import StrategyConfig
+        cfg.strategies["favorite"] = StrategyConfig({
+            "enabled": True,
+            "contracts_per_trade": 10,
+            "markets": [
+                {"coin": "btc", "interval": "5m", "mode": "live"},
+            ],
+        })
+        _print_market_table(cfg)
+        out = capsys.readouterr().out
+        assert "Estimated capital" in out
+
+
+class TestMainAnalyzeSubcommand:
+    """Cover main() with 'analyze' command (no sub-subcommand -> shows help)."""
+
+    def test_analyze_no_subcommand_shows_help(self, capsys):
+        with patch("sys.argv", ["timba", "analyze"]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 0
+
+
+class TestCmdConfig:
+    """Tests for timba config command."""
+
+    def _write_config(self, tmp_path, content):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(content)
+        return cfg
+
+    def test_summary_shows_strategy_and_settings(self, tmp_path, capsys):
+        cfg = self._write_config(tmp_path, """
+favorite:
+  enabled: true
+  min_price: 0.95
+  contracts_per_trade: 10
+  markets:
+    - coin: btc
+      interval: 5m
+      mode: paper
+      entry_window_sec: 15
+      close_window_sec: 2
+""")
+        args = argparse.Namespace(config=str(cfg), raw=False, verbose=False, no_color=True)
+        cmd_config(args)
+        out = capsys.readouterr().out
+        assert "favorite" in out
+        assert "enabled" in out
+        assert "min_price: 0.95" in out
+        assert "contracts_per_trade: 10" in out
+        assert "1 (1 coins: btc)" in out
+        assert "paper" in out
+
+    def test_summary_shows_disabled_strategy(self, tmp_path, capsys):
+        cfg = self._write_config(tmp_path, """
+favorite:
+  enabled: false
+  markets: []
+""")
+        args = argparse.Namespace(config=str(cfg), raw=False, verbose=False, no_color=True)
+        cmd_config(args)
+        out = capsys.readouterr().out
+        assert "disabled" in out
+
+    def test_summary_mixed_modes(self, tmp_path, capsys):
+        cfg = self._write_config(tmp_path, """
+favorite:
+  enabled: true
+  min_price: 0.95
+  markets:
+    - coin: btc
+      interval: 5m
+      mode: live
+      entry_window_sec: 15
+      close_window_sec: 2
+    - coin: eth
+      interval: 5m
+      mode: paper
+      entry_window_sec: 15
+      close_window_sec: 2
+""")
+        args = argparse.Namespace(config=str(cfg), raw=False, verbose=False, no_color=True)
+        cmd_config(args)
+        out = capsys.readouterr().out
+        assert "1 live" in out
+        assert "1 paper" in out
+        assert "2 (2 coins:" in out
+
+    def test_verbose_shows_per_market(self, tmp_path, capsys):
+        cfg = self._write_config(tmp_path, """
+favorite:
+  enabled: true
+  min_price: 0.95
+  markets:
+    - coin: btc
+      interval: 5m
+      mode: paper
+      entry_window_sec: 15
+      close_window_sec: 2
+    - coin: eth
+      interval: 15m
+      mode: live
+      entry_window_sec: 30
+      close_window_sec: 3
+""")
+        args = argparse.Namespace(config=str(cfg), raw=False, verbose=True, no_color=True)
+        cmd_config(args)
+        out = capsys.readouterr().out
+        assert "BTC" in out
+        assert "ETH" in out
+        assert "entry=15s" in out
+        assert "entry=30s" in out
+        assert "close=2s" in out
+        assert "close=3s" in out
+
+    def test_raw_dumps_yaml(self, tmp_path, capsys):
+        content = "log_level: DEBUG\nfavorite:\n  enabled: true\n  markets: []\n"
+        cfg = self._write_config(tmp_path, content)
+        args = argparse.Namespace(config=str(cfg), raw=True, verbose=False, no_color=True)
+        cmd_config(args)
+        out = capsys.readouterr().out
+        assert "log_level: DEBUG" in out
+
+    def test_invalid_config_exits(self, tmp_path):
+        cfg = self._write_config(tmp_path, "favorite:\n  typo_key: 123\n")
+        args = argparse.Namespace(config=str(cfg), raw=False, verbose=False, no_color=True)
+        with pytest.raises(SystemExit):
+            cmd_config(args)
+
+    def test_no_markets_shows_none(self, tmp_path, capsys):
+        cfg = self._write_config(tmp_path, """
+favorite:
+  enabled: true
+  min_price: 0.95
+  markets: []
+""")
+        args = argparse.Namespace(config=str(cfg), raw=False, verbose=False, no_color=True)
+        cmd_config(args)
+        out = capsys.readouterr().out
+        assert "none" in out

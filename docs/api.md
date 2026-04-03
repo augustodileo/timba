@@ -29,12 +29,23 @@ Liveness check. Returns bot status and uptime.
 **Response:**
 ```json
 {
-  "status": "running",
+  "status": "ok",
   "uptime_seconds": 3600,
-  "markets_active": 7,
-  "last_tick_age_sec": 0.5
+  "last_tick_seconds_ago": 1,
+  "feed_healthy": true,
+  "errors": 0
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | `"ok"` if last tick < 10s ago, `"stale"` otherwise |
+| `uptime_seconds` | integer | Seconds since bot started |
+| `last_tick_seconds_ago` | integer | Seconds since last tick (-1 if no tick yet) |
+| `feed_healthy` | boolean | Whether the price feed is responsive |
+| `errors` | integer | Error count in current session |
+
+This is a pure liveness check — no business data. Portfolio, cash, PnL, and trade stats are in `/api/status`.
 
 **CLI usage:** `BotClient.health()` / `BotClient.is_running()`
 
@@ -42,30 +53,64 @@ Also available at `/health` (alias).
 
 ---
 
+### GET /api/ready
+
+Readiness check. Returns `200` if the bot is ready to trade (main loop ticking, feed healthy). Returns `503` if not ready. Use this in Kubernetes readiness probes or load balancer health checks.
+
+**Response (ready):** `200 OK`
+```json
+{"ready": true}
+```
+
+**Response (not ready):** `503 Service Unavailable`
+```json
+{"ready": false}
+```
+
+Also available at `/ready` (alias).
+
+---
+
 ### GET /api/status
 
-Full bot status: health + portfolio state + version.
+Full bot status: health + portfolio state + strategies + version.
 
 **Response:**
 ```json
 {
   "health": {
-    "status": "running",
-    "uptime_seconds": 3600
+    "status": "ok",
+    "uptime_seconds": 3600,
+    "last_tick_seconds_ago": 1,
+    "feed_healthy": true,
+    "errors": 0
   },
   "state": {
-    "cash": 71.17,
-    "portfolio": 71.17,
-    "strategies": {
-      "favorite": {
-        "stats": {"paper_win": 25, "paper_loss": 1},
-        "total_pnl": -4.135
-      }
+    "portfolio": 112.50,
+    "cash": 92.50,
+    "pending_redemption": 20.00,
+    "total_pnl": 12.50,
+    "started_at": "2026-03-30T10:00:00+00:00"
+  },
+  "strategies": {
+    "favorite": {
+      "markets": [
+        {"coin": "btc", "interval": "5m", "mode": "paper", "entry_window_sec": 10, "close_window_sec": 3}
+      ]
     }
   },
   "version": "v1.0.0"
 }
 ```
+
+| Top-level key | Source | Description |
+|---------------|--------|-------------|
+| `health` | `HealthState.to_dict()` | Same as `/api/health` response |
+| `state` | `State.to_dashboard_dict()` | In-memory portfolio state |
+| `strategies` | Config | Enabled strategies with their market configs |
+| `version` | Build | Git version tag |
+
+**Note:** `portfolio`, `cash`, and `total_pnl` appear in both `health` and `state`. The `state` object is the authoritative source — `health` mirrors these values for the liveness endpoint.
 
 **CLI usage:** `BotClient.status()` -> `timba status`
 
@@ -153,6 +198,7 @@ Graceful shutdown. Sets the shutdown event, which causes the main loop to exit c
 | `timba start` | Starts the bot (no API call) | Run the bot process |
 | `timba stop` | `POST /api/stop` | Graceful shutdown |
 | `timba status` | `GET /api/status` + `GET /api/trades` | Show status and trade summary |
+| `timba monitor` | `GET /api/status` + `GET /api/trades` (polling) | Live dashboard |
 | `timba init` | None (local only) | Set up ~/.timba/ credentials |
 
 ## Error handling

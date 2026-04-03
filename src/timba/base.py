@@ -9,6 +9,7 @@ Provides:
 import logging
 import threading
 import time
+import typing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -139,7 +140,7 @@ class MarketPosition:
     # ── Thread safety ──
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
-    def transition(self, new_state: PositionState, **kwargs) -> bool:
+    def transition(self, new_state: PositionState, **kwargs: object) -> bool:
         """Atomically transition to a new state, with validation.
 
         Only allows transitions defined in _VALID_TRANSITIONS.
@@ -244,7 +245,7 @@ def check_liquidity(pos: MarketPosition) -> bool:
     return True
 
 
-def poll_order_fill(clob_client, order_id: str, label: str) -> tuple[float, float]:
+def poll_order_fill(clob_client: object, order_id: str, label: str) -> tuple[float, float]:
     """Poll CLOB order status to get actual fill size and price.
 
     Returns (filled_size, avg_fill_price). Cancels and returns (0, 0) if not filled.
@@ -281,7 +282,7 @@ def place_order(
     side: str,
     fill_price: float,
     fill_size: int,
-    clob_client,
+    clob_client: object,
 ) -> bool:
     """Place a real order on the CLOB.
 
@@ -343,9 +344,9 @@ def place_order(
 
 def resolve_winner(
     pos: MarketPosition,
-    feed,
-    clob_client,
-    get_midpoint_fn,
+    feed: object,
+    clob_client: object,
+    get_midpoint_fn: typing.Callable,
 ) -> bool | None:
     """Determine if our side won after market close.
 

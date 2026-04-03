@@ -9,7 +9,7 @@ Dead simple:
 """
 
 
-def _cfg(val, default):
+def _cfg(val: object, default: object) -> object:
     """Return val if not None, else default. Unlike `or`, respects 0 and 0.0."""
     return val if val is not None else default
 
@@ -53,7 +53,7 @@ class FavoriteStrategy(Strategy):
             },
         }
 
-    def create_position(self, market: UpDownMarket, market_cfg: dict, global_cfg) -> FavoritePosition | None:
+    def create_position(self, market: UpDownMarket, market_cfg: dict, global_cfg: object) -> FavoritePosition | None:
         entry_window = market_cfg.get("entry_window_sec")
         close_window = market_cfg.get("close_window_sec")
         if entry_window is None or close_window is None:

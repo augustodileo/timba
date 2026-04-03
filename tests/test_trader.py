@@ -148,6 +148,7 @@ class TestTrader:
 
         with patch("timba.market.discover_active_markets", return_value=[sample_updown_market]):
             trader._discover_and_register()
+            trader._drain_mutations()
             assert sample_updown_market.slug in _favorite_positions(trader)
 
     def test_market_missing_entry_window_skipped(self, tmp_data_dir, tmp_path):
@@ -185,6 +186,7 @@ favorite:
         strat = trader._strategies.get("favorite")
         if strat:
             trader.discovery._register_for_strategy("favorite", strat, market)
+        trader._drain_mutations()
         assert market.slug not in _favorite_positions(trader)
 
     def test_market_missing_close_window_skipped(self, tmp_data_dir, tmp_path):
@@ -223,6 +225,7 @@ favorite:
         strat = trader._strategies.get("favorite")
         if strat:
             trader.discovery._register_for_strategy("favorite", strat, market)
+        trader._drain_mutations()
         assert market.slug not in _favorite_positions(trader)
 
     def test_market_mode_off_skipped(self, tmp_data_dir, sample_config_yaml, sample_updown_market):
@@ -240,6 +243,7 @@ favorite:
 
         with patch("timba.market.discover_active_markets", return_value=[sample_updown_market]):
             trader._discover_and_register()
+            trader._drain_mutations()
             assert sample_updown_market.slug not in _favorite_positions(trader)
 
 
@@ -745,15 +749,9 @@ class TestBuildTickData:
 
 
 class TestUpdateHealth:
-    def test_updates_all_health_fields(self, trader_setup):
-        """_update_health should populate all health fields."""
+    def test_updates_liveness_fields(self, trader_setup):
+        """_update_health should populate liveness fields only."""
         trader, state = trader_setup
-        state.cash = 500.0
-        state.portfolio = 750.0
-
-        # Add a position so active_snipes > 0
-        pos = _make_position(slug="test-health", contracts=5)
-        trader.positions["favorite"]["test-health"] = pos
 
         before = time.time()
         trader._update_health()
@@ -761,6 +759,6 @@ class TestUpdateHealth:
 
         assert before <= trader.health.last_tick <= after
         assert trader.health.feed_healthy is True
-        assert trader.health.active_snipes == 1
-        assert trader.health.portfolio == pytest.approx(750.0)
-        assert trader.health.cash == pytest.approx(500.0)
+        d = trader.health.to_dict()
+        assert d["status"] == "ok"
+        assert "portfolio" not in d  # business data is in State, not health

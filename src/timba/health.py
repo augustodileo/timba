@@ -28,55 +28,70 @@ def sanitize_log_line(line: str) -> str:
 
 
 class HealthState:
-    """Shared health state updated by the trader."""
+    """Liveness state — is the bot alive and its feeds working?
 
-    def __init__(self):
+    This is NOT the dashboard. Portfolio, cash, PnL, and trade stats
+    live in State.to_dashboard_dict() and are served via /api/status.
+
+    Thread safety: _lock ensures the HTTP server reads a consistent
+    snapshot while the main loop writes.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
         self.started_at = time.time()
         self.last_tick = 0.0
         self.feed_healthy = True
-        self.active_snipes = 0
-        self.total_wins = 0
-        self.total_losses = 0
-        self.total_pnl = 0.0
-        self.portfolio = 0.0
-        self.cash = 0.0
-        self.pending_redemption = 0.0
         self.errors = 0
 
+    def update(self, **kwargs: object) -> None:
+        """Atomically update multiple fields. Called from main loop."""
+        with self._lock:
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    def is_ready(self) -> bool:
+        """Readiness: main loop is ticking and feed is healthy."""
+        with self._lock:
+            if self.last_tick == 0:
+                return False  # hasn't started yet
+            return (time.time() - self.last_tick) < 10 and self.feed_healthy
+
     def to_dict(self) -> dict:
-        now = time.time()
-        return {
-            "status": "ok" if (now - self.last_tick) < 10 else "stale",
-            "uptime_seconds": int(now - self.started_at),
-            "last_tick_seconds_ago": int(now - self.last_tick) if self.last_tick else -1,
-            "feed_healthy": self.feed_healthy,
-            "active_snipes": self.active_snipes,
-            "total_wins": self.total_wins,
-            "total_losses": self.total_losses,
-            "total_pnl": round(self.total_pnl, 2),
-            "portfolio": round(self.portfolio, 2),
-            "cash": round(self.cash, 2),
-            "pending_redemption": round(self.pending_redemption, 2),
-            "errors": self.errors,
-        }
+        with self._lock:
+            now = time.time()
+            return {
+                "status": "ok" if (now - self.last_tick) < 10 else "stale",
+                "uptime_seconds": int(now - self.started_at),
+                "last_tick_seconds_ago": int(now - self.last_tick) if self.last_tick else -1,
+                "feed_healthy": self.feed_healthy,
+                "errors": self.errors,
+            }
 
 
 class HealthHandler(BaseHTTPRequestHandler):
     """HTTP handler for /health endpoint."""
     health_state: HealthState = None
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         if self.path == "/health":
             data = self.health_state.to_dict() if self.health_state else {"status": "unknown"}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(data).encode())
+        elif self.path == "/ready":
+            ready = self.health_state.is_ready() if self.health_state else False
+            code = 200 if ready else 503
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ready": ready}).encode())
         else:
             self.send_response(404)
             self.end_headers()
 
-    def log_message(self, format, *args):
+    def log_message(self, format: str, *args: object) -> None:
         pass  # suppress HTTP access logs
 
 
@@ -86,14 +101,14 @@ class LogFileHandler(logging.Handler):
     Keeps the last max_lines lines. Safe for the dashboard to read.
     """
 
-    def __init__(self, path: Path, max_lines: int = 200):
+    def __init__(self, path: Path, max_lines: int = 200) -> None:
         super().__init__()
         self.path = path
         self.max_lines = max_lines
         self._lines: list[str] = []
         self._lock = threading.Lock()
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
         try:
             line = self.format(record)
             line = sanitize_log_line(line)

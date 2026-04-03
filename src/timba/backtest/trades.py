@@ -23,7 +23,7 @@ from timba.ticks import init_ids, write_strategy_data
 
 
 def backtest_main(
-    config, bt_dir: Path, source_env: str, strategy: str = "favorite",
+    config: object, bt_dir: Path, source_env: str, strategy: str = "favorite",
     since: str | None = None,
 ) -> None:
     """Run a full backtest: copy ticks from source env, evaluate, simulate trades.
@@ -55,7 +55,7 @@ def backtest_main(
         bot_db.unlink()
         # Clean WAL/SHM files
         for suffix in ("-wal", "-shm"):
-            f = Path(str(bot_db) + suffix)
+            f = bot_db.parent / (bot_db.name + suffix)
             if f.exists():
                 f.unlink()
 
@@ -89,7 +89,9 @@ def backtest_main(
     for m in scfg.markets:
         market_cfgs[(m["coin"], m["interval"])] = m
 
-    scfg.get("contracts_per_trade") or 5  # 0 invalid per schema
+    contracts_per_trade = scfg.get("contracts_per_trade")
+    if contracts_per_trade is None:
+        contracts_per_trade = 5
 
     # ── Simulation loop ──
     results = []
@@ -125,7 +127,7 @@ def backtest_main(
             # Write EV to SQLite — same as live
             if decision.computed:
                 ev_id = write_strategy_data(
-                    None, strategy, "evs", decision.computed,
+                    strategy, decision.computed,
                     slug=slug, tick_id=tick_data.tick_id,
                 )
                 pos.ev_id = ev_id

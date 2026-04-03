@@ -60,12 +60,10 @@ class TestCashLock:
 
         def try_reserve(cost):
             barrier.wait()
-            with trader._cash_lock:
-                if state.available_cash < cost:
-                    results["skipped"] += 1
-                    return
-                state.reserved_cash += cost
+            if state.try_reserve(cost):
                 results["reserved"] += 1
+            else:
+                results["skipped"] += 1
 
         # Both want $60 but only $100 available — at most one should succeed
         t1 = threading.Thread(target=try_reserve, args=(60,))
@@ -353,3 +351,70 @@ class TestWaitForTick:
 
         assert tick == 0.01
         assert max_price == pytest.approx(0.99)
+
+    def test_polls_until_tick_changes_and_fits(self, trader_setup):
+        """When initial tick is too tight, polls until tick changes (lines 229, 235-245)."""
+        trader, state = trader_setup
+
+        # First call: tick=0.01, max=0.99 → ceil(0.995/0.01)*0.01 = 1.00 > 0.99
+        # Second call: tick=0.001, max=0.999 → ceil(0.995/0.001)*0.001 = 0.995 <= 0.999
+        snapshot_tight = MagicMock()
+        snapshot_tight.tick_size = 0.01
+        snapshot_loose = MagicMock()
+        snapshot_loose.tick_size = 0.001
+
+        call_count = [0]
+        def mock_get(slug):
+            call_count[0] += 1
+            if call_count[0] <= 1:
+                return snapshot_tight
+            return snapshot_loose
+
+        trader.market_cache.get = mock_get
+
+        with patch("timba.orders.time.sleep"):
+            tick, max_price = trader.order_manager._wait_for_tick(
+                "test-slug", 0.995, timeout=5,
+            )
+
+        assert tick == 0.001
+        assert max_price == pytest.approx(0.999)
+
+    def test_timeout_returns_current_tick(self, trader_setup):
+        """When timeout expires, returns current (unfillable) tick and max_price (lines 242-243)."""
+        trader, state = trader_setup
+
+        # Always return a tight tick where price doesn't fit
+        snapshot = MagicMock()
+        snapshot.tick_size = 0.01
+        trader.market_cache.get = MagicMock(return_value=snapshot)
+
+        with patch("timba.orders.time.sleep"):
+            tick, max_price = trader.order_manager._wait_for_tick(
+                "test-slug", 0.995, timeout=0.001,
+            )
+
+        # Should return the current tick even though price doesn't fit
+        assert tick == 0.01
+        assert max_price == pytest.approx(0.99)
+
+
+class TestCreateClobClient:
+    """Test _create_clob_client (lines 121-127)."""
+
+    def test_creates_clob_client_with_config(self, trader_setup):
+        """_create_clob_client creates a PolymarketClobClient with correct args."""
+        trader, state = trader_setup
+
+        with patch("timba.orders.PolymarketClobClient") as mock_clob_cls:
+            mock_client = MagicMock()
+            mock_clob_cls.return_value = mock_client
+            result = trader.order_manager._create_clob_client()
+
+        mock_clob_cls.assert_called_once_with(
+            private_key=trader.order_manager._config.polymarket.private_key,
+            address=trader.order_manager._config.polymarket.funder,
+            signature_type=trader.order_manager._config.polymarket.signature_type,
+        )
+        mock_client.set_api_creds.assert_called_once()
+        assert result is mock_client

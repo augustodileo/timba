@@ -14,7 +14,7 @@ def _timba_home() -> Path:
 class BotClient:
     """Talk to a running timba bot via its HTTP API."""
 
-    def __init__(self, host=None, port=None):
+    def __init__(self, host: str | None = None, port: int | None = None) -> None:
         if host and port:
             self.base_url = f"http://{host}:{port}"
         else:

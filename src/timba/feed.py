@@ -50,7 +50,7 @@ class DirectionSignal:
 class PriceFeed:
     """Background price feed from Coinbase."""
 
-    def __init__(self, coins: list[str] | None = None, poll_interval: float = 1.0, stale_threshold: float = FEED_STALE_THRESHOLD_SEC):
+    def __init__(self, coins: list[str] | None = None, poll_interval: float = 1.0, stale_threshold: float = FEED_STALE_THRESHOLD_SEC) -> None:
         self.coins = coins or list(COIN_TO_PAIR.keys())
         self.poll_interval = poll_interval
         self._lock = threading.Lock()
@@ -61,7 +61,7 @@ class PriceFeed:
         self._last_success: float = 0  # timestamp of last successful price update
         self._stale_threshold = stale_threshold
 
-    def start(self):
+    def start(self) -> None:
         """Start the background polling thread and backfill history."""
         if self._running:
             return
@@ -80,7 +80,7 @@ class PriceFeed:
             min(len(h) for h in self._history.values()) if self._history else 0,
         )
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the background thread."""
         self._running = False
         if self._thread:
@@ -88,9 +88,10 @@ class PriceFeed:
 
     def is_healthy(self) -> bool:
         """Returns False if feed has been stale for too long (circuit breaker)."""
-        if self._last_success == 0:
-            return True  # haven't started polling yet
-        return (time.time() - self._last_success) < self._stale_threshold
+        with self._lock:
+            if self._last_success == 0:
+                return True  # haven't started polling yet
+            return (time.time() - self._last_success) < self._stale_threshold
 
     def get_price(self, coin: str) -> float | None:
         """Get the latest price for a coin."""
@@ -143,7 +144,6 @@ class PriceFeed:
         seconds_trending = 0
         for i in range(len(history) - 1, 0, -1):
             ts, price = history[i]
-            history[i - 1][1]
             this_dir = "up" if price >= open_price else "down"
             if this_dir != direction:
                 seconds_trending = now - ts
@@ -217,7 +217,7 @@ class PriceFeed:
             price_now=current,
         )
 
-    def _backfill_history(self):
+    def _backfill_history(self) -> None:
         """Fetch 20 minutes of 1-minute candles from Coinbase Exchange API.
 
         This gives the bot price history from before it started, so markets
@@ -253,7 +253,7 @@ class PriceFeed:
             except (requests.RequestException, KeyError, ValueError):
                 logger.debug("Failed to backfill %s", coin.upper(), exc_info=True)
 
-    def _poll_loop(self):
+    def _poll_loop(self) -> None:
         """Background thread: poll Coinbase every second."""
         session = requests.Session()
 
@@ -282,7 +282,7 @@ class PriceFeed:
                             (ts, p) for ts, p in self._history[coin]
                             if ts >= cutoff
                         ]
-                    self._last_success = now
+                        self._last_success = now
                 except (requests.RequestException, KeyError, ValueError):
                     pass  # skip this coin this tick, try again next second
 

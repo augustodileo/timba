@@ -8,6 +8,7 @@ for the main loop via the mutation queue.
 import logging
 import queue
 import time
+import typing
 
 from timba.base import (
     RESOLVE_MAP,
@@ -36,11 +37,11 @@ class ResolutionWorker:
         strategies: dict[str, Strategy],
         mutations: queue.Queue,
         feed: PriceFeed | None,
-        clob_client,
+        clob_client: object,
         market_cache: MarketCache,
         state: State,
-        recorded_ticks,
-    ):
+        recorded_ticks: object,
+    ) -> None:
         self._positions = positions
         self._seen_slugs = seen_slugs
         self._strategies = strategies
@@ -55,7 +56,7 @@ class ResolutionWorker:
     # Public API
     # ------------------------------------------------------------------
 
-    def run_loop(self, is_running):
+    def run_loop(self, is_running: typing.Callable[[], bool]) -> None:
         """Background thread entry point."""
         logger.info("Resolution thread started")
         while is_running():
@@ -69,7 +70,7 @@ class ResolutionWorker:
     # Internals
     # ------------------------------------------------------------------
 
-    def _resolve_pending(self):
+    def _resolve_pending(self) -> None:
         """Scan pending positions, check CLOB (HTTP), queue mutations."""
         now = time.time()
         for name, strat in self._strategies.items():
@@ -99,7 +100,7 @@ class ResolutionWorker:
 
     def _check_and_queue_resolve(
         self, name: str, strat: Strategy, pos: MarketPosition,
-    ):
+    ) -> None:
         """Check resolution via CLOB (HTTP), queue the state mutation."""
         mapping = RESOLVE_MAP.get(pos.state)
         if mapping is None:
@@ -124,7 +125,7 @@ class ResolutionWorker:
             lambda n=name, p=pos, s=strat: self.commit_resolve(n, s, p)
         )
 
-    def commit_resolve(self, name: str, strat: Strategy, pos: MarketPosition):
+    def commit_resolve(self, name: str, strat: Strategy, pos: MarketPosition) -> None:
         """Apply resolution to state. Only called from main loop via _drain_mutations."""
         self._state.record_trade(pos, name, extra_fields=strat.extra_fields(pos))
 

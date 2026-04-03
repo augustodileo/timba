@@ -69,29 +69,28 @@ MAX_EVAL_WORKERS = 10
 class LockedDict:
     """Thread-safe dict wrapper for cross-thread key access (get/set/pop)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._data: dict = {}
         self._lock = threading.Lock()
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None) -> object:
         with self._lock:
             return self._data.get(key, default)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value: object) -> None:
         with self._lock:
             self._data[key] = value
 
-    def pop(self, key, *args):
+    def pop(self, key: str, *args: object) -> object:
         with self._lock:
             return self._data.pop(key, *args)
 
 
 class Trader:
-    def __init__(self, config: Config, state: State, data_dir: str = "data"):
+    def __init__(self, config: Config, state: State, data_dir: str = "data") -> None:
         self.config = config
         self.state = state
         self.data_dir = str(data_dir)
-        self._cash_lock = threading.Lock()
         self._mutations = queue.Queue()
 
         # Connect to CLOB
@@ -162,7 +161,6 @@ class Trader:
         self.order_manager = OrderManager(
             config=config,
             state=state,
-            cash_lock=self._cash_lock,
             mutations=self._mutations,
             market_cache=self.market_cache,
             api_creds=self._api_creds,
@@ -175,6 +173,7 @@ class Trader:
             strategies=self._strategies,
             strategy_configs=self._strategy_configs,
             market_cache=self.market_cache,
+            mutations=self._mutations,
             data_dir=self.data_dir,
         )
 
@@ -198,7 +197,7 @@ class Trader:
             market_cache=self.market_cache,
         )
 
-    def _init_strategies(self):
+    def _init_strategies(self) -> None:
         """Auto-discover enabled strategies by matching config keys to registered strategies."""
         for name, scfg in self.config.strategies.items():
             if not scfg.enabled or not scfg.markets:
@@ -215,7 +214,7 @@ class Trader:
     # Main loop
     # ------------------------------------------------------------------
 
-    def run(self, shutdown_event: threading.Event | None = None):
+    def run(self, shutdown_event: threading.Event | None = None) -> None:
         """Main loop: evaluate → bet → apply state mutations.
 
         Background threads do all network I/O and queue mutations.
@@ -281,9 +280,9 @@ class Trader:
                 break
 
             try:
+                self._drain_mutations()
                 self._cleanup_stale_positions()
                 self._evaluate_all()
-                self._drain_mutations()
                 self._update_health()
 
             except KeyboardInterrupt:
@@ -315,7 +314,7 @@ class Trader:
 
             time.sleep(MAIN_LOOP_SEC)
 
-    def _drain_mutations(self):
+    def _drain_mutations(self) -> None:
         """Apply all queued state mutations. Only called from main loop."""
         while not self._mutations.empty():
             try:
@@ -330,26 +329,26 @@ class Trader:
     # Backward-compat delegates (tests + internal references)
     # ------------------------------------------------------------------
 
-    def _discover_and_register(self):
+    def _discover_and_register(self) -> None:
         self.discovery.discover_and_register()
 
-    def _execute_bet(self, name, strat, pos, decision):
+    def _execute_bet(self, name: str, strat: Strategy, pos: MarketPosition, decision: BetDecision) -> None:
         self.order_manager.execute_bet(name, strat, pos, decision)
 
-    def _commit_resolve(self, name, strat, pos):
+    def _commit_resolve(self, name: str, strat: Strategy, pos: MarketPosition) -> None:
         self.resolver.commit_resolve(name, strat, pos)
 
-    def _commit_order_fill(self, actual_cost, reserved_cost):
+    def _commit_order_fill(self, actual_cost: float, reserved_cost: float) -> None:
         self.order_manager.commit_order_fill(actual_cost, reserved_cost)
 
-    def _release_order(self, reserved_cost):
+    def _release_order(self, reserved_cost: float) -> None:
         self.order_manager.release_order(reserved_cost)
 
     # ------------------------------------------------------------------
     # Scheduler (background thread — HTTP only, queues state writes)
     # ------------------------------------------------------------------
 
-    def _scheduler_loop(self):
+    def _scheduler_loop(self) -> None:
         """Background thread: maintenance tasks. Queues state writes."""
         logger.info("Scheduler thread started")
         while self._background_running:
@@ -359,7 +358,7 @@ class Trader:
                 logger.debug("Scheduler error", exc_info=True)
             time.sleep(SCHEDULER_POLL_SEC)
 
-    def _scheduler_tick(self):
+    def _scheduler_tick(self) -> None:
         """Run scheduler maintenance, queue any state mutations."""
         from timba.scheduler import is_safe_window
         if not is_safe_window(self.scheduler.intervals, self.scheduler.buffer_sec):
@@ -387,19 +386,14 @@ class Trader:
         if rotation_reason:
             self._mutations.put(lambda r=rotation_reason: self._rotate_db(r))
 
-    def _apply_balance_sync(self, usdc: float):
+    def _apply_balance_sync(self, usdc: float) -> None:
         """Apply balance sync to state. Only called from main loop."""
-        from timba import db
-        old_cash = self.state.cash
-        old_portfolio = self.state.portfolio
-        self.state.cash = usdc
-        self.state.pending_redemption = db.get_pending_redemption()
-        self.state.portfolio = usdc + self.state.pending_redemption
+        old_cash, old_portfolio = self.state.apply_balance_sync(usdc)
         if abs(usdc - old_cash) > 0.10 or abs(self.state.portfolio - old_portfolio) > 0.10:
             logger.info("Balance sync: cash=$%.2f portfolio=$%.2f pending=$%.2f",
                         self.state.cash, self.state.portfolio, self.state.pending_redemption)
 
-    def _rotate_db(self, reason: str):
+    def _rotate_db(self, reason: str) -> None:
         """Rotate the database. Only called from main loop via _drain_mutations."""
         from timba import db
         archive = db.rotate(reason)
@@ -412,7 +406,7 @@ class Trader:
     # Stale position cleanup (main loop)
     # ------------------------------------------------------------------
 
-    def _cleanup_stale_positions(self):
+    def _cleanup_stale_positions(self) -> None:
         """Remove positions whose market ended long ago without resolution.
         Also evicts old entries from _seen_slugs (2h TTL) and _recorded_ticks.
         """
@@ -441,18 +435,19 @@ class Trader:
                             sniped_at=pos.sniped_at or datetime.now(timezone.utc).isoformat(),
                         )
 
-        # Evict old seen_slugs (2h TTL — markets older than this won't reappear in discovery)
+        # Evict old seen_slugs (2h TTL — markets older than this won't reappear in discovery).
+        # Mutate in-place so discovery thread's references stay valid.
         seen_cutoff = now - 7200
         for name in self._seen_slugs:
-            old = self._seen_slugs[name]
-            if old and min(old.values(), default=now) < seen_cutoff:
-                self._seen_slugs[name] = {s: t for s, t in old.items() if t > seen_cutoff}
+            stale = [s for s, t in self._seen_slugs[name].items() if t <= seen_cutoff]
+            for s in stale:
+                del self._seen_slugs[name][s]
 
     # ------------------------------------------------------------------
     # Strategy evaluation (main loop)
     # ------------------------------------------------------------------
 
-    def _evaluate_all(self):
+    def _evaluate_all(self) -> None:
         """Evaluate all strategies in parallel using ThreadPoolExecutor."""
         if not self.feed or not self.feed.is_healthy():
             if self.feed:
@@ -476,7 +471,7 @@ class Trader:
 
         from concurrent.futures import ThreadPoolExecutor
 
-        def _eval_and_bet(item):
+        def _eval_and_bet(item: tuple[str, str, MarketPosition]) -> None:
             name, slug, pos = item
 
             # Order in flight — skip entirely, thread is handling it
@@ -508,7 +503,7 @@ class Trader:
 
             if decision.computed:
                 ev_id = write_strategy_data(
-                    None, name, "evs", decision.computed,
+                    name, decision.computed,
                     slug=slug, tick_id=tick_data.tick_id,
                 )
                 pos.ev_id = ev_id
@@ -557,17 +552,13 @@ class Trader:
     # Health, redemption
     # ------------------------------------------------------------------
 
-    def _update_health(self):
-        self.health.last_tick = time.time()
-        self.health.feed_healthy = self.feed.is_healthy() if self.feed else False
-        self.health.active_snipes = sum(len(p) for p in self.positions.values())
-        self.health.portfolio = self.state.portfolio
-        self.health.cash = self.state.cash
-        self.health.pending_redemption = self.state.pending_redemption
-        from timba import db
-        self.health.total_pnl = db.get_total_pnl() if db.is_initialized() else 0.0
+    def _update_health(self) -> None:
+        self.health.update(
+            last_tick=time.time(),
+            feed_healthy=self.feed.is_healthy() if self.feed else False,
+        )
 
-    def _redeem_scan(self):
+    def _redeem_scan(self) -> None:
         from timba import db
         db.flush()
         unredeemed = db.get_unredeemed_wins()
@@ -582,7 +573,7 @@ class Trader:
         t.start()
 
     @staticmethod
-    def _redeem_scan_bg(relay_client, clob_client, state, trades):
+    def _redeem_scan_bg(relay_client: object, clob_client: object, state: State, trades: list[dict]) -> None:
         from timba import db
         from timba.redeem import check_needs_redeem
         for trade in trades:
@@ -609,7 +600,7 @@ class Trader:
                 logger.warning("REDEEM failed | %s %s | condition=%s | will retry",
                                coin, interval, cid[:16])
 
-    def _log_clob_state(self):
+    def _log_clob_state(self) -> None:
         try:
             usdc = self.clob_client.get_usdc_balance()
             logger.info("CLOB state | USDC=$%.2f | portfolio=$%.2f | cash=$%.2f",

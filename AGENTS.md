@@ -44,6 +44,14 @@ Dev run: `uv run timba start --config ./config.yaml`
 - **Strategy framework** -- add `strategies/mystrat.py`, implement `Strategy` ABC, call `register()` at module level, add `mystrat:` section to config.yaml. Auto-discovered, auto-validated.
 - **Schema validation** -- config validated via JSON Schema on every load. Base schema in `config.schema.yaml`, strategy fields injected from `config_schema()`.
 - Use `mode: live` not `mode: on` -- YAML parses `on` as boolean `True`.
+- **Type annotations required** -- ruff enforces `ANN` rules. All function arguments and return types must be annotated.
+- **Error return conventions**:
+  - `None` — "no data available" (e.g. `get_midpoint() -> float | None`, `get_direction() -> Signal | None`)
+  - `False` — "operation refused" (e.g. `deduct_cash() -> bool`, `check_liquidity() -> bool`)
+  - `(0, 0)` — "no result but not an error" (e.g. `poll_order_fill() -> tuple[float, float]`)
+  - `[]` — "empty collection" (e.g. `load_trades() -> list[dict]`)
+  - `raise` — "programmer error / system broken" (e.g. `db.init()` not called)
+  - Never mix patterns within the same function. Type hints make the convention explicit.
 
 ## Security Rules
 

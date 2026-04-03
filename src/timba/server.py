@@ -19,7 +19,7 @@ class BotAPIHandler(BaseHTTPRequestHandler):
     version = ""
     data_dir = None        # Path to data directory (for trade queries)
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
@@ -27,6 +27,10 @@ class BotAPIHandler(BaseHTTPRequestHandler):
         if path in ("/health", "/api/health"):
             data = self.health_state.to_dict() if self.health_state else {"status": "unknown"}
             self._json_response(200, data)
+        elif path in ("/ready", "/api/ready"):
+            ready = self.health_state.is_ready() if self.health_state else False
+            code = 200 if ready else 503
+            self._json_response(code, {"ready": ready})
         elif path == "/api/status":
             health = self.health_state.to_dict() if self.health_state else {"status": "unknown"}
             state = {}
@@ -56,7 +60,7 @@ class BotAPIHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def _handle_trades(self, params: dict):
+    def _handle_trades(self, params: dict) -> None:
         """Serve recent trades from SQLite (read-only)."""
         import glob
         import os
@@ -98,7 +102,7 @@ class BotAPIHandler(BaseHTTPRequestHandler):
         trades.sort(key=lambda t: t.get("sniped_at") or "")
         self._json_response(200, trades[-limit:])
 
-    def _handle_logs(self, params: dict):
+    def _handle_logs(self, params: dict) -> None:
         """Serve recent log lines from bot.log."""
         import os
         lines_count = int(params.get("lines", [20])[0])
@@ -117,7 +121,7 @@ class BotAPIHandler(BaseHTTPRequestHandler):
         except Exception:
             self._json_response(200, {"lines": []})
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         if self.path == "/api/stop":
             if self.shutdown_event:
                 self.shutdown_event.set()
@@ -126,7 +130,7 @@ class BotAPIHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def _json_response(self, code: int, data: dict):
+    def _json_response(self, code: int, data: dict | list) -> None:
         body = json.dumps(data).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -134,11 +138,11 @@ class BotAPIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, format, *args):
+    def log_message(self, format: str, *args: object) -> None:
         pass  # suppress HTTP access logs
 
 
-def start_api_server(health_state, bot_state, shutdown_event, version, data_dir=None, config=None, port=8080, bind=""):
+def start_api_server(health_state: object, bot_state: object, shutdown_event: object, version: str, data_dir: object = None, config: object = None, port: int = 8080, bind: str = "") -> HTTPServer:
     """Start the API server in a background thread.
 
     bind defaults to TIMBA_BIND env var, or 127.0.0.1 if unset.

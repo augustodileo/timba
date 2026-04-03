@@ -6,6 +6,7 @@ in the shared recorded_ticks dict for the eval loop to read.
 
 import logging
 import time
+import typing
 
 from timba.base import MarketPosition
 from timba.feed import PriceFeed
@@ -24,10 +25,10 @@ class TickRecorder:
         self,
         positions: dict[str, dict[str, MarketPosition]],
         strategies: dict[str, str],
-        recorded_ticks,
+        recorded_ticks: object,
         feed: PriceFeed | None,
         market_cache: MarketCache,
-    ):
+    ) -> None:
         self._positions = positions
         self._strategies = strategies
         self._recorded_ticks = recorded_ticks
@@ -38,7 +39,7 @@ class TickRecorder:
     # Public API
     # ------------------------------------------------------------------
 
-    def run_loop(self, is_running):
+    def run_loop(self, is_running: typing.Callable[[], bool]) -> None:
         """Background thread entry point."""
         logger.info("Tick recorder started")
         while is_running():
@@ -67,7 +68,7 @@ class TickRecorder:
     # Internals
     # ------------------------------------------------------------------
 
-    def _record_tick(self, pos: MarketPosition):
+    def _record_tick(self, pos: MarketPosition) -> None:
         """Record one tick for a market from cache. Stores snapshot for eval loop."""
         signal = self._feed.get_direction(pos.coin, pos.window_start_ts)
         if signal is None:

@@ -8,14 +8,11 @@ Strategies join their own computed data (EVs, etc.) to ticks via tick_id,
 writing to per-strategy subdirectories.
 
 Storage: SQLite (bot.db) via the db module.
-Backtest still writes JSONL — pass data_dir to write_strategy_data() to use JSONL.
 """
 
 import itertools
-import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -29,30 +26,6 @@ def _next_tick_id() -> int:
 
 def _next_ev_id() -> int:
     return next(_ev_counter)
-
-
-def _max_id_in_jsonl(path: Path) -> int:
-    """Read the last few lines of a JSONL file to find the max 'id' field.
-
-    Legacy helper — used by backtest JSONL loading and migration scripts.
-    """
-    if not path.exists():
-        return 0
-    max_id = 0
-    try:
-        size = path.stat().st_size
-        with open(path, "rb") as f:
-            f.seek(max(0, size - 65536))
-            tail = f.read().decode("utf-8", errors="replace")
-        for line in tail.strip().split("\n"):
-            try:
-                record = json.loads(line)
-                max_id = max(max_id, record.get("id", 0))
-            except (json.JSONDecodeError, ValueError):
-                continue
-    except OSError:
-        pass
-    return max_id
 
 
 def init_ids() -> None:
@@ -122,42 +95,26 @@ def record_tick(
 
 
 def write_strategy_data(
-    data_dir: str | Path | None,
     strategy: str,
-    filename_prefix: str,
     data: dict,
     slug: str = "",
     tick_id: int = 0,
 ) -> int:
-    """Write strategy-specific computed data.
-
-    data_dir=None → SQLite (live bot, db must be initialized).
-    data_dir=Path → JSONL file in data_dir/strategy/ (backtest).
+    """Write strategy-specific computed data to SQLite.
 
     Returns ev_id for cross-referencing with trades.
     """
+    from timba import db
+
     ev_id = _next_ev_id()
     data["id"] = ev_id
     data["tick_id"] = tick_id
     if slug:
         data["slug"] = slug
 
-    if data_dir is not None:
-        # Backtest path: write JSONL
-        date_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-        try:
-            d = Path(data_dir) / strategy
-            d.mkdir(parents=True, exist_ok=True)
-            with open(d / f"{filename_prefix}_{date_str}.jsonl", "a") as f:
-                f.write(json.dumps(data) + "\n")
-        except OSError:
-            pass
-    else:
-        # Live path: write SQLite
-        from timba import db
-        try:
-            db.insert_ev(data, strategy)
-        except Exception:
-            logger.debug("EV write failed", exc_info=True)
+    try:
+        db.insert_ev(data, strategy)
+    except Exception:
+        logger.debug("EV write failed", exc_info=True)
 
     return ev_id

@@ -190,7 +190,7 @@ def _signal_stats(trades: list[dict]) -> dict:
     }
 
 
-def analyze_main(data_dir: Path, strategy: str | None = None):
+def analyze_main(data_dir: Path, strategy: str | None = None) -> None:
     """Print trade analysis with rich tables."""
     from rich.console import Console
     from rich.panel import Panel
@@ -487,7 +487,7 @@ def analyze_main(data_dir: Path, strategy: str | None = None):
     console.print()
 
 
-def _print_loss_timelines(console, data_dir: Path, losses: list[dict], strategy: str):
+def _print_loss_timelines(console: object, data_dir: Path, losses: list[dict], strategy: str) -> None:
     """For each loss, load all EVs for that slug and their ticks, print timeline."""
     import sqlite3
 

@@ -1,6 +1,6 @@
 """Tests for maintenance scheduler."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from timba.scheduler import MaintenanceScheduler, get_close_minutes, get_next_safe_window, is_safe_window
 
@@ -54,95 +54,6 @@ class TestMaintenanceScheduler:
         assert ":05" in desc
         assert "buffer" in desc
 
-    @patch("timba.db.get_pending_redemption", return_value=0.0)
-    def test_sync_balance(self, mock_pending):
-        s = MaintenanceScheduler(["5m"])
-        clob = MagicMock()
-        clob.get_usdc_balance.return_value = 100.0
-        state = MagicMock()
-        state.cash = 95.0
-        state.portfolio = 95.0
-        state.pending_redemption = 0.0
-        s._sync_balance(clob, state)
-        assert state.cash == 100.0
-
-    def test_sync_balance_failure(self):
-        s = MaintenanceScheduler(["5m"])
-        clob = MagicMock()
-        clob.get_usdc_balance.side_effect = OSError("timeout")
-        state = MagicMock()
-        # Should not crash
-        s._sync_balance(clob, state)
-
-    @patch("timba.scheduler.is_safe_window", return_value=False)
-    def test_should_run_returns_false_when_unsafe(self, mock_safe):
-        s = MaintenanceScheduler(["5m"])
-        s._last_balance_sync = 0  # overdue
-        assert s.should_run_maintenance() is False
-
-    @patch("timba.scheduler.is_safe_window", return_value=True)
-    @patch("timba.scheduler.time")
-    def test_should_run_returns_true_when_balance_due(self, mock_time, mock_safe):
-        mock_time.time.return_value = 1000.0
-        s = MaintenanceScheduler(["5m"])
-        s._last_balance_sync = 0  # 1000s ago, well past 300s interval
-        assert s.should_run_maintenance() is True
-
-    @patch("timba.scheduler.is_safe_window", return_value=True)
-    @patch("timba.scheduler.time")
-    def test_should_run_returns_false_when_not_due(self, mock_time, mock_safe):
-        mock_time.time.return_value = 1000.0
-        s = MaintenanceScheduler(["5m"])
-        s._last_balance_sync = 999.0   # 1s ago
-        s._last_redeem_scan = 999.0
-        assert s.should_run_maintenance() is False
-
-    @patch("timba.scheduler.is_safe_window", return_value=False)
-    def test_run_skips_when_unsafe(self, mock_safe):
-        s = MaintenanceScheduler(["5m"])
-        clob = MagicMock()
-        state = MagicMock()
-        s._last_balance_sync = 0
-        s.run(clob, state)
-        clob.get_usdc_balance.assert_not_called()
-
-    @patch("timba.db.get_pending_redemption", return_value=0.0)
-    @patch("timba.scheduler.is_safe_window", return_value=True)
-    @patch("timba.scheduler.time")
-    def test_run_syncs_balance_when_due(self, mock_time, mock_safe, mock_pending):
-        mock_time.time.return_value = 1000.0
-        s = MaintenanceScheduler(["5m"])
-        s._last_balance_sync = 0
-        clob = MagicMock()
-        clob.get_usdc_balance.return_value = 50.0
-        state = MagicMock()
-        state.cash = 50.0
-        state.portfolio = 50.0
-        state.pending_redemption = 0.0
-
-        s.run(clob, state)
-
-        clob.get_usdc_balance.assert_called_once()
-        assert s._last_balance_sync == 1000.0
-
-    @patch("timba.scheduler.is_safe_window", return_value=True)
-    @patch("timba.scheduler.time")
-    def test_run_calls_redeem_when_due(self, mock_time, mock_safe):
-        mock_time.time.return_value = 1000.0
-        s = MaintenanceScheduler(["5m"])
-        s._last_balance_sync = 999.0  # not due
-        s._last_redeem_scan = 0       # due
-        clob = MagicMock()
-        clob.get_usdc_balance.return_value = 50.0
-        state = MagicMock()
-        state.cash = 50.0
-        relay = MagicMock()
-        redeem_fn = MagicMock()
-
-        s.run(clob, state, relay_client=relay, redeem_fn=redeem_fn)
-
-        redeem_fn.assert_called_once()
-        assert s._last_redeem_scan == 1000.0
 
 
 class TestGetNextSafeWindow:
@@ -168,6 +79,31 @@ class TestGetNextSafeWindow:
         mock_time.time.return_value = 150.0  # 2:30 into the hour
         offset = get_next_safe_window(["1h"], buffer_sec=1800)
         assert offset == 300
+
+
+class TestSeedRotationDate:
+    def test_seeds_when_db_has_data(self):
+        """seed_rotation_date sets _last_rotation_date when DB has data (line 104)."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+        s = MaintenanceScheduler(["5m"])
+        assert s._last_rotation_date is None
+
+        with patch("timba.db.db_size_mb", return_value=5.0):
+            s.seed_rotation_date()
+
+        assert s._last_rotation_date == datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    def test_does_not_seed_when_db_empty(self):
+        """seed_rotation_date does NOT set date when DB is tiny (size <= 0.1)."""
+        from unittest.mock import patch
+        s = MaintenanceScheduler(["5m"])
+        assert s._last_rotation_date is None
+
+        with patch("timba.db.db_size_mb", return_value=0.05):
+            s.seed_rotation_date()
+
+        assert s._last_rotation_date is None
 
 
 class TestShouldRotateDb:

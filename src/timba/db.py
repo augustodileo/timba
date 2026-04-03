@@ -15,6 +15,7 @@ import logging
 import queue
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -176,13 +177,18 @@ def flush() -> None:
 def reset() -> None:
     """Reset module state. For tests only."""
     global _db_path, _data_dir, _write_queue, _writer_thread, _writer_running, _db_version
+    # Clear any pending rotation so writer isn't stuck waiting
+    _rotation_event.clear()
+    _rotation_done.clear()
     if _write_queue is not None:
         _write_queue.join()  # drain pending writes first
     _writer_running = False
     if _write_queue is not None:
         _write_queue.put(None)  # signal writer to stop
     if _writer_thread is not None:
-        _writer_thread.join(timeout=5)
+        _writer_thread.join(timeout=10)
+        if _writer_thread.is_alive():
+            logger.warning("db writer thread did not stop cleanly")
     _write_queue = None
     _writer_thread = None
     # Close any read connections on this thread
@@ -252,9 +258,9 @@ def rotate(reason: str = "scheduled") -> Path | None:
         # 3. Rename current DB (+ WAL/SHM files) — safe now, all connections closed
         old_path.rename(archive_path)
         for suffix in ("-wal", "-shm"):
-            src = Path(str(old_path) + suffix)
+            src = old_path.parent / (old_path.name + suffix)
             if src.exists():
-                dst = Path(str(archive_path) + suffix)
+                dst = archive_path.parent / (archive_path.name + suffix)
                 src.rename(dst)
 
         # 4. Create fresh bot.db with schema
@@ -358,7 +364,7 @@ def _open_writer_conn() -> sqlite3.Connection:
     return conn
 
 
-def _writer_loop():
+def _writer_loop() -> None:
     """Single writer thread: drains the queue and commits in batches.
 
     Owns the only write connection. Commits after draining all pending items
@@ -378,8 +384,7 @@ def _writer_loop():
             _rotation_done.set()
             # Wait until rotate() clears _rotation_event (file ops done)
             while _rotation_event.is_set():
-                import time as _t
-                _t.sleep(0.005)
+                time.sleep(0.005)
             conn = _open_writer_conn()
 
         try:
@@ -453,17 +458,22 @@ def _get_read_connection() -> sqlite3.Connection:
     if not hasattr(_read_local, "version"):
         _read_local.version = -1
 
+    # Read version and path atomically — rotation could change both
+    with _rotation_lock:
+        current_version = _db_version
+        current_path = _db_path
+
     # If DB was rotated, close stale connections and reopen
-    if _read_local.version != _db_version:
+    if _read_local.version != current_version:
         for conn in _read_local.connections.values():
             try:
                 conn.close()
             except Exception:
                 pass
         _read_local.connections = {}
-        _read_local.version = _db_version
+        _read_local.version = current_version
 
-    key = str(_db_path)
+    key = str(current_path)
     conn = _read_local.connections.get(key)
     if conn is None:
         conn = sqlite3.connect(key, timeout=10)

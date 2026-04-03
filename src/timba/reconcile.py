@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def reconcile_startup(clob_client, state) -> dict:
+def reconcile_startup(clob_client: object, state: object) -> dict:
     """Reconcile local state with CLOB reality. Returns summary dict.
 
     Args:

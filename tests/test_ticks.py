@@ -1,11 +1,9 @@
 """Tests for ticks.py — tick/EV ID generation and data writing."""
 
-import json
 from unittest.mock import patch
 
 from timba import db
 from timba.ticks import (
-    _max_id_in_jsonl,
     _next_ev_id,
     _next_tick_id,
     init_ids,
@@ -120,27 +118,8 @@ class TestRecordTick:
 
 
 class TestWriteStrategyData:
-    def test_writes_to_strategy_subdir(self, tmp_path):
-        """Backtest mode: data_dir provided → writes JSONL."""
-        data = {"ev_up": 0.05, "ev_down": -0.02}
-        ev_id = write_strategy_data(
-            tmp_path, "favorite", "evs", data, slug="btc-5m-123", tick_id=42,
-        )
-
-        strat_dir = tmp_path / "favorite"
-        assert strat_dir.exists()
-
-        files = list(strat_dir.glob("evs_*.jsonl"))
-        assert len(files) == 1
-
-        line = json.loads(files[0].read_text().strip())
-        assert line["id"] == ev_id
-        assert line["tick_id"] == 42
-        assert line["slug"] == "btc-5m-123"
-        assert line["ev_up"] == 0.05
-
     def test_writes_to_sqlite(self, tmp_path):
-        """Live mode: data_dir=None → writes SQLite."""
+        """Live mode: writes to SQLite."""
         db.init(tmp_path)
         # Need a tick for FK
         db.insert_tick({
@@ -153,7 +132,7 @@ class TestWriteStrategyData:
 
         data = {"ev_up": 0.05, "ev_down": -0.02}
         ev_id = write_strategy_data(
-            None, "favorite", "evs", data, slug="btc-5m-123", tick_id=42,
+            "favorite", data, slug="btc-5m-123", tick_id=42,
         )
 
         db.flush()
@@ -162,17 +141,10 @@ class TestWriteStrategyData:
         assert evs[42]["id"] == ev_id
         assert evs[42]["ev_up"] == 0.05
 
-    def test_omits_slug_when_empty(self, tmp_path):
-        data = {"ev": 0.01}
-        write_strategy_data(tmp_path, "favorite", "evs", data, slug="", tick_id=1)
-
-        files = list((tmp_path / "favorite").glob("evs_*.jsonl"))
-        line = json.loads(files[0].read_text().strip())
-        assert "slug" not in line
-
     def test_returns_incrementing_ev_ids(self, tmp_path):
-        id1 = write_strategy_data(tmp_path, "favorite", "evs", {}, tick_id=1)
-        id2 = write_strategy_data(tmp_path, "favorite", "evs", {}, tick_id=2)
+        db.init(tmp_path)
+        id1 = write_strategy_data("favorite", {}, tick_id=1)
+        id2 = write_strategy_data("favorite", {}, tick_id=2)
         assert id2 == id1 + 1
 
 
@@ -272,43 +244,6 @@ class TestDbRotation:
         assert size < 1  # tiny test DB
 
 
-class TestMaxIdInJsonl:
-    def test_nonexistent_file_returns_zero(self, tmp_path):
-        assert _max_id_in_jsonl(tmp_path / "nope.jsonl") == 0
-
-    def test_empty_file_returns_zero(self, tmp_path):
-        p = tmp_path / "empty.jsonl"
-        p.write_text("")
-        assert _max_id_in_jsonl(p) == 0
-
-    def test_single_record(self, tmp_path):
-        p = tmp_path / "one.jsonl"
-        p.write_text(json.dumps({"id": 42, "value": "x"}) + "\n")
-        assert _max_id_in_jsonl(p) == 42
-
-    def test_multiple_records(self, tmp_path):
-        p = tmp_path / "multi.jsonl"
-        lines = [
-            json.dumps({"id": 10}),
-            json.dumps({"id": 20}),
-            json.dumps({"id": 30}),
-        ]
-        p.write_text("\n".join(lines) + "\n")
-        assert _max_id_in_jsonl(p) == 30
-
-    def test_corrupt_lines_skipped(self, tmp_path):
-        p = tmp_path / "corrupt.jsonl"
-        lines = [
-            json.dumps({"id": 5}),
-            "NOT VALID JSON {{{",
-            json.dumps({"id": 15}),
-            "another garbage line",
-            json.dumps({"id": 10}),
-        ]
-        p.write_text("\n".join(lines) + "\n")
-        assert _max_id_in_jsonl(p) == 15
-
-
 class TestErrorPaths:
     def test_record_tick_survives_db_error(self, tmp_path):
         """record_tick returns a tick_id even when db.insert_tick raises."""
@@ -320,20 +255,12 @@ class TestErrorPaths:
         assert isinstance(tick_id, int)
         assert tick_id > 0
 
-    def test_write_strategy_data_jsonl_survives_oserror(self):
-        """JSONL write with an invalid data_dir still returns an ev_id."""
-        ev_id = write_strategy_data(
-            "/no/such/path/ever", "favorite", "evs", {"ev": 0.01}, tick_id=1,
-        )
-        assert isinstance(ev_id, int)
-        assert ev_id > 0
-
     def test_write_strategy_data_sqlite_survives_db_error(self, tmp_path):
         """SQLite write failure still returns an ev_id."""
         db.init(tmp_path)
         with patch("timba.db.insert_ev", side_effect=RuntimeError("boom")):
             ev_id = write_strategy_data(
-                None, "favorite", "evs", {"ev": 0.01}, tick_id=1,
+                "favorite", {"ev": 0.01}, tick_id=1,
             )
         assert isinstance(ev_id, int)
         assert ev_id > 0

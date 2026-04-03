@@ -45,15 +45,6 @@ class TestPortfolioState:
         assert state.cash == pytest.approx(100)  # unchanged
         assert state.portfolio == pytest.approx(100)
 
-    def test_refund_cash(self, tmp_path):
-        state = State()
-        state.init_portfolio(1000)
-        state.deduct_cash(200)
-        assert state.cash == pytest.approx(800)
-        state.refund_cash(200)
-        assert state.cash == pytest.approx(1000)
-        assert state.portfolio == pytest.approx(1000)
-
     def test_portfolio_and_cash_in_dashboard_dict(self, tmp_path):
         from timba import db
         data_dir = tmp_path / "data"

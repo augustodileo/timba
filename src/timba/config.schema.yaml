@@ -19,8 +19,8 @@ properties:
 
   polymarket:
     type: object
-    description: "Polymarket API settings"
-    additionalProperties: true
+    description: "Polymarket API settings (secrets go in env vars, not here)"
+    additionalProperties: false
     properties:
       max_workers:
         type: integer

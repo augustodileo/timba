@@ -37,7 +37,7 @@ _COMMON_MARKET_PROPERTIES = {
 class ConfigValidationError(Exception):
     """Raised when config.yaml fails schema validation."""
 
-    def __init__(self, errors: list[str]):
+    def __init__(self, errors: list[str]) -> None:
         self.errors = errors
         msg = f"Config validation failed ({len(errors)} error{'s' if len(errors) != 1 else ''}):\n"
         msg += "\n".join(f"  - {e}" for e in errors)
@@ -52,7 +52,7 @@ def _load_base_schema() -> dict:
     return _base_cache
 
 
-def _build_strategy_schema(strat) -> dict:
+def _build_strategy_schema(strat: object) -> dict:
     """Build JSON Schema for one strategy from its config_schema() declaration."""
     decl = strat.config_schema()
 

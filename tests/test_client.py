@@ -136,3 +136,35 @@ class TestBotClientIntegration:
             assert shutdown_event.is_set()
         finally:
             server.shutdown()
+
+    def test_trades_against_server(self, tmp_path):
+        """BotClient.trades() calls /api/trades and returns list (line 59)."""
+        from timba import db as _db
+        from timba.state import State
+        _db.init(tmp_path / "data")
+        health = HealthState()
+        health.last_tick = time.time()
+        shutdown_event = threading.Event()
+        state = State()
+
+        server = start_api_server(health, state, shutdown_event, "test", port=18100, bind="127.0.0.1")
+        try:
+            client = BotClient(host="127.0.0.1", port=18100)
+            result = client.trades(limit=10)
+            assert isinstance(result, list)
+        finally:
+            server.shutdown()
+
+    def test_logs_against_server(self):
+        """BotClient.logs() calls /api/logs and returns lines list (lines 62-63)."""
+        health = HealthState()
+        health.last_tick = time.time()
+        shutdown_event = threading.Event()
+
+        server = start_api_server(health, None, shutdown_event, "test", port=18101, bind="127.0.0.1")
+        try:
+            client = BotClient(host="127.0.0.1", port=18101)
+            result = client.logs(lines=5)
+            assert isinstance(result, list)
+        finally:
+            server.shutdown()

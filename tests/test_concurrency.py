@@ -25,7 +25,7 @@ def _make_position(**kw):
 
 
 class TestCashLockUnderPool:
-    """Verify _cash_lock prevents double-spend under real ThreadPoolExecutor."""
+    """Verify State._lock prevents double-spend under real ThreadPoolExecutor."""
 
     def test_pool_workers_respect_cash_limit(self, trader_setup):
         """10 workers each trying to reserve $20 on $100 — max 5 should succeed."""
@@ -36,10 +36,8 @@ class TestCashLockUnderPool:
         reserved_count = {"n": 0}
 
         def try_reserve():
-            with trader._cash_lock:
-                if state.available_cash >= 20.0:
-                    state.reserved_cash += 20.0
-                    reserved_count["n"] += 1
+            if state.try_reserve(20.0):
+                reserved_count["n"] += 1
 
         with ThreadPoolExecutor(max_workers=10) as pool:
             futures = [pool.submit(try_reserve) for _ in range(10)]
@@ -59,9 +57,7 @@ class TestCashLockUnderPool:
             state.reserved_cash = 0.0
 
             def try_reserve():
-                with trader._cash_lock:
-                    if state.available_cash >= 30.0:
-                        state.reserved_cash += 30.0
+                state.try_reserve(30.0)
 
             with ThreadPoolExecutor(max_workers=5) as pool:
                 futures = [pool.submit(try_reserve) for _ in range(5)]

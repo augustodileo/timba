@@ -367,3 +367,192 @@ class TestAPIServer:
             assert data["lines"] == []
         finally:
             server.shutdown()
+
+    def test_ready_endpoint_when_ready(self):
+        """GET /api/ready returns 200 when feed is healthy and ticking (lines 31-33)."""
+        import urllib.request
+
+        health = HealthState()
+        health.last_tick = time.time()
+        health.feed_healthy = True
+        shutdown_event = threading.Event()
+
+        server = start_api_server(health, None, shutdown_event, "test-v1", port=18105, bind="127.0.0.1")
+        try:
+            resp = urllib.request.urlopen("http://127.0.0.1:18105/api/ready", timeout=5)
+            data = json.loads(resp.read())
+            assert resp.status == 200
+            assert data["ready"] is True
+        finally:
+            server.shutdown()
+
+    def test_ready_endpoint_when_not_ready(self):
+        """GET /api/ready returns 503 when health is not ready (lines 31-33)."""
+        import urllib.error
+        import urllib.request
+
+        health = HealthState()
+        # last_tick = 0 means hasn't started yet
+        shutdown_event = threading.Event()
+
+        server = start_api_server(health, None, shutdown_event, "test-v1", port=18106, bind="127.0.0.1")
+        try:
+            with pytest.raises(urllib.error.HTTPError) as exc_info:
+                urllib.request.urlopen("http://127.0.0.1:18106/api/ready", timeout=5)
+            assert exc_info.value.code == 503
+            data = json.loads(exc_info.value.read())
+            assert data["ready"] is False
+        finally:
+            server.shutdown()
+
+    def test_ready_endpoint_legacy_path(self):
+        """GET /ready legacy path also works (lines 31-33)."""
+        import urllib.request
+
+        health = HealthState()
+        health.last_tick = time.time()
+        health.feed_healthy = True
+        shutdown_event = threading.Event()
+
+        server = start_api_server(health, None, shutdown_event, "test-v1", port=18107, bind="127.0.0.1")
+        try:
+            resp = urllib.request.urlopen("http://127.0.0.1:18107/ready", timeout=5)
+            data = json.loads(resp.read())
+            assert data["ready"] is True
+        finally:
+            server.shutdown()
+
+    def test_status_with_state_error(self, tmp_path):
+        """State.to_dashboard_dict() raising should yield empty state (lines 40-41)."""
+        import urllib.request
+        from unittest.mock import MagicMock
+
+        health = HealthState()
+        health.last_tick = time.time()
+        shutdown_event = threading.Event()
+
+        state = MagicMock()
+        state.to_dashboard_dict.side_effect = Exception("boom")
+
+        server = start_api_server(health, state, shutdown_event, "test-v1", port=18108, bind="127.0.0.1")
+        try:
+            resp = urllib.request.urlopen("http://127.0.0.1:18108/api/status", timeout=5)
+            data = json.loads(resp.read())
+            assert data["state"] == {}
+        finally:
+            server.shutdown()
+
+    def test_trades_bad_extras_json_ignored(self, tmp_path):
+        """Trade with invalid extras JSON should still be returned (lines 95-96)."""
+        import urllib.request
+
+        db_path = tmp_path / "bot.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("""CREATE TABLE trades (
+            id INTEGER PRIMARY KEY, type TEXT NOT NULL, strategy TEXT NOT NULL,
+            slug TEXT NOT NULL, condition_id TEXT, coin TEXT NOT NULL DEFAULT '',
+            interval TEXT NOT NULL DEFAULT '', side TEXT, buy_price REAL,
+            contracts INTEGER, pnl REAL, sniped_at TEXT, resolved_at TEXT,
+            end_timestamp INTEGER, market_mode TEXT, skip_reason TEXT,
+            ticks_evaluated INTEGER, ev_id INTEGER, token_id TEXT,
+            redeemed INTEGER DEFAULT 0, order_id TEXT, min_price REAL,
+            midpoint REAL, extras TEXT
+        )""")
+        conn.execute(
+            "INSERT INTO trades (id, type, strategy, slug, coin, interval, sniped_at, redeemed, extras) "
+            "VALUES (1, 'win', 'favorite', 'btc-5m-100', 'btc', '5m', '2026-03-31T10:00:00', 0, 'not-valid-json{{')"
+        )
+        conn.commit()
+        conn.close()
+
+        health = HealthState()
+        health.last_tick = time.time()
+        shutdown_event = threading.Event()
+
+        server = start_api_server(health, None, shutdown_event, "test-v1", data_dir=tmp_path, port=18109, bind="127.0.0.1")
+        try:
+            resp = urllib.request.urlopen("http://127.0.0.1:18109/api/trades", timeout=5)
+            data = json.loads(resp.read())
+            assert len(data) == 1
+            assert data[0]["slug"] == "btc-5m-100"
+        finally:
+            server.shutdown()
+
+    def test_trades_corrupt_db_skipped(self, tmp_path):
+        """A corrupt DB file should be skipped (lines 98-99)."""
+        import urllib.request
+
+        # Create a corrupt file that looks like a rotated db
+        bad_db = tmp_path / "bot_2026-01-01.db"
+        bad_db.write_text("not a valid sqlite database")
+
+        health = HealthState()
+        health.last_tick = time.time()
+        shutdown_event = threading.Event()
+
+        server = start_api_server(health, None, shutdown_event, "test-v1", data_dir=tmp_path, port=18110, bind="127.0.0.1")
+        try:
+            resp = urllib.request.urlopen("http://127.0.0.1:18110/api/trades", timeout=5)
+            data = json.loads(resp.read())
+            assert data == []
+        finally:
+            server.shutdown()
+
+    def test_logs_endpoint_read_error(self, tmp_path):
+        """If log file read fails, return empty lines (lines 121-122)."""
+        import os
+        import urllib.request
+
+        # Create a log file then make it unreadable
+        log_file = tmp_path / "bot.log"
+        log_file.write_text("some log line\n")
+        os.chmod(str(log_file), 0o000)
+
+        health = HealthState()
+        health.last_tick = time.time()
+        shutdown_event = threading.Event()
+
+        server = start_api_server(health, None, shutdown_event, "test-v1", data_dir=tmp_path, port=18111, bind="127.0.0.1")
+        try:
+            resp = urllib.request.urlopen("http://127.0.0.1:18111/api/logs", timeout=5)
+            data = json.loads(resp.read())
+            assert data["lines"] == []
+        finally:
+            server.shutdown()
+            os.chmod(str(log_file), 0o644)  # restore for cleanup
+
+    def test_stop_endpoint_no_shutdown_event(self):
+        """POST /api/stop with no shutdown_event still returns success."""
+        import urllib.request
+
+        health = HealthState()
+        health.last_tick = time.time()
+
+        from timba.server import BotAPIHandler
+        # Temporarily set shutdown_event to None
+        server = start_api_server(health, None, None, "test-v1", port=18112, bind="127.0.0.1")
+        BotAPIHandler.shutdown_event = None
+        try:
+            req = urllib.request.Request("http://127.0.0.1:18112/api/stop", method="POST", data=b"")
+            resp = urllib.request.urlopen(req, timeout=5)
+            data = json.loads(resp.read())
+            assert data["status"] == "stopping"
+        finally:
+            server.shutdown()
+
+    def test_bind_defaults_to_env_var(self, monkeypatch):
+        """start_api_server uses TIMBA_BIND env var when bind is empty (line 152)."""
+        import urllib.request
+
+        monkeypatch.setenv("TIMBA_BIND", "127.0.0.1")
+        health = HealthState()
+        health.last_tick = time.time()
+        shutdown_event = threading.Event()
+
+        server = start_api_server(health, None, shutdown_event, "test-v1", port=18113)
+        try:
+            resp = urllib.request.urlopen("http://127.0.0.1:18113/api/health", timeout=5)
+            data = json.loads(resp.read())
+            assert data["status"] == "ok"
+        finally:
+            server.shutdown()

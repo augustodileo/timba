@@ -1,11 +1,12 @@
 """Shared helpers for backtest: data loading, validation, config lookup."""
 
 import json
+import sqlite3
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from timba.config import INTERVAL_SECS
+from timba.constants import INTERVAL_SECS
 from timba.feed import DirectionSignal
 from timba.market import UpDownMarket
 from timba.strategies import TickData
@@ -49,124 +50,87 @@ def validate_trade(trade: dict) -> str | None:
     return None
 
 
-# ── Data loading: ticks ──────────────────────────────────────────────
+# ── Data loading helpers ─────────────────────────────────────────────
 
-def load_ticks_from_files(files: list[Path]):
-    """Load ticks from JSONL files, grouped by slug, sorted by timestamp."""
-    by_slug: dict[str, list[dict]] = defaultdict(list)
-    skip_count = 0
-    for f in files:
-        with open(f) as fh:
-            for line in fh:
-                try:
-                    tick = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if validate_tick(tick):
-                    skip_count += 1
-                    continue
-                by_slug[tick["slug"]].append(tick)
-    for slug in by_slug:
-        by_slug[slug].sort(key=lambda t: t.get("ts", ""))
-    return dict(by_slug), skip_count
+def _list_db_files(data_dir: Path) -> list[Path]:
+    """Return all bot_*.db + bot.db in data_dir, sorted chronologically."""
+    dbs = sorted(data_dir.glob("bot_*.db"))
+    current = data_dir / "bot.db"
+    if current.exists():
+        dbs.append(current)
+    return dbs
 
 
-def load_ticks(data_dir: Path):
-    """Load ticks from data_dir/ticks_*.jsonl (excluding backtest outputs)."""
-    files = sorted(f for f in data_dir.glob("ticks_*.jsonl")
-                   if ".backtest." not in f.name)
-    return load_ticks_from_files(files)
+def _unpack_extras(row: dict) -> dict:
+    """Merge extras JSON blob into row dict."""
+    extras_raw = row.pop("extras", None)
+    if extras_raw:
+        try:
+            row.update(json.loads(extras_raw))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return row
 
 
-def load_ticks_from_file(path: Path):
-    """Load ticks from a single file, grouped by slug."""
-    return load_ticks_from_files([path])
-
-
-# ── Data loading: EVs ────────────────────────────────────────────────
-
-def load_evs(data_dir: Path, strategy: str = "favorite"):
-    """Load EVs from {strategy}/evs_*.jsonl, keyed by tick_id."""
-    evs = {}
-    strat_dir = data_dir / strategy
-    if not strat_dir.exists():
-        return evs
-    files = sorted(f for f in strat_dir.glob("evs_*.jsonl")
-                   if ".backtest." not in f.name)
-    for f in files:
-        with open(f) as fh:
-            for line in fh:
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                tid = ev.get("tick_id")
-                if tid is not None:
-                    evs[tid] = ev
-    return evs
-
-
-def load_evs_from_file(path: Path) -> dict[int, dict]:
-    """Load EVs from a single file, keyed by tick_id."""
-    evs = {}
-    with open(path) as fh:
-        for line in fh:
-            try:
-                ev = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            tid = ev.get("tick_id")
-            if tid is not None:
-                evs[tid] = ev
-    return evs
-
+# ── Data loading: ticks + EVs (from SQLite) ──────────────────────────
 
 def load_ticks_with_evs(data_dir: Path, strategy: str = "favorite",
-                        evs_file: Path | None = None):
-    """Load ticks joined with EVs. Returns ticks grouped by slug with EV fields merged.
+                        evs_file: Path | None = None) -> tuple[dict[str, list[dict]], int]:
+    """Load ticks joined with EVs from all SQLite DBs in data_dir.
 
-    If evs_file is provided, uses that for EVs (e.g., backtest output).
-    Otherwise loads live evs from {strategy}/ subdir.
-    Falls back to reading EVs embedded in ticks (old format compat).
+    Returns ticks grouped by slug with EV fields merged, and skip count.
     """
-    ticks_by_slug, skip_count = load_ticks(data_dir)
+    db_files = _list_db_files(data_dir)
+    by_slug: dict[str, list[dict]] = defaultdict(list)
+    evs: dict[int, dict] = {}
 
-    if evs_file:
-        evs = load_evs_from_file(evs_file)
-    else:
-        evs = load_evs(data_dir, strategy=strategy)
+    for db_file in db_files:
+        try:
+            conn = sqlite3.connect(str(db_file), timeout=5)
+            conn.row_factory = sqlite3.Row
 
+            # Load ticks
+            for r in conn.execute("SELECT * FROM ticks ORDER BY ts"):
+                tick = dict(r)
+                by_slug[tick["slug"]].append(tick)
+
+            # Load EVs
+            rows = conn.execute(
+                "SELECT * FROM evs WHERE strategy = ?", (strategy,)
+            ).fetchall()
+            for r in rows:
+                d = _unpack_extras(dict(r))
+                tid = d.get("tick_id")
+                if tid is not None:
+                    evs[tid] = d
+
+            conn.close()
+        except Exception:
+            continue
+
+    # Merge EVs into ticks
     if evs:
-        # Merge EVs into ticks by tick id (tick.id == ev.tick_id)
-        for slug, ticks in ticks_by_slug.items():
-            for tick in ticks:
+        for slug_ticks in by_slug.values():
+            for tick in slug_ticks:
                 tid = tick.get("id")
                 ev = evs.get(tid, {}) if tid is not None else {}
                 tick["ev_up"] = ev.get("ev_up", tick.get("ev_up", 0.0))
                 tick["ev_down"] = ev.get("ev_down", tick.get("ev_down", 0.0))
                 tick["p_up"] = ev.get("p_up", tick.get("p_up", 0.0))
                 tick["p_down"] = ev.get("p_down", tick.get("p_down", 0.0))
-                # Also merge remaining/progress from EVs (strategy-specific)
                 if "remaining" in ev:
                     tick["remaining"] = ev["remaining"]
                 if "progress" in ev:
                     tick["progress"] = ev["progress"]
-    # else: old format — EVs already embedded in ticks, nothing to merge
 
-    return ticks_by_slug, skip_count
+    return dict(by_slug), 0
 
 
 # ── Data loading: trades ─────────────────────────────────────────────
 
 def load_trades(data_dir: Path, strategy: str | None = None) -> list[dict]:
-    """Load all trades from current + rotated SQLite DBs, with JSONL fallback."""
-    import sqlite3
-
-    # Scan all DBs: rotated (bot_*.db) + current (bot.db)
-    db_files = sorted(data_dir.glob("bot_*.db"))
-    current = data_dir / "bot.db"
-    if current.exists():
-        db_files.append(current)
+    """Load all trades from current + rotated SQLite DBs."""
+    db_files = _list_db_files(data_dir)
 
     trades = []
     for db_file in db_files:
@@ -183,37 +147,12 @@ def load_trades(data_dir: Path, strategy: str | None = None) -> list[dict]:
             for r in rows:
                 d = dict(r)
                 d["redeemed"] = bool(d.get("redeemed"))
-                extras_raw = d.pop("extras", None)
-                if extras_raw:
-                    try:
-                        d.update(json.loads(extras_raw))
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                _unpack_extras(d)
                 trades.append(d)
         except Exception:
             continue
 
-    if trades:
-        trades.sort(key=lambda t: t.get("sniped_at") or "")
-        return trades
-
-    # JSONL fallback
-    trades = []
-    if strategy:
-        dirs = [data_dir / strategy]
-    else:
-        dirs = [d for d in data_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
-
-    for d in dirs:
-        if not d.exists():
-            continue
-        for f in sorted(d.glob("trades_*.jsonl")):
-            with open(f) as fh:
-                for line in fh:
-                    try:
-                        trades.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
+    trades.sort(key=lambda t: t.get("sniped_at") or "")
     return trades
 
 
@@ -230,7 +169,7 @@ def load_trade_outcomes(data_dir: Path, strategy: str | None = None) -> dict[str
 # ── Formula helpers ──────────────────────────────────────────────────
 
 def run_formula(trade: dict, agree_boost: float, disagree_penalty: float,
-                change_cap_pct: float, trend_cap_sec: float):
+                change_cap_pct: float, trend_cap_sec: float) -> tuple[float, float]:
     """Estimate P(win) from trade snapshot, return (p_win, ev).
 
     Uses the midpoint as the market-implied probability (favorite strategy
@@ -302,20 +241,3 @@ def resolve_from_ticks(ticks: list[dict]) -> str | None:
     if mid_down >= 0.5 and mid_up < 0.5:
         return "down"
     return None
-
-
-# ── Output file naming ───────────────────────────────────────────────
-
-def next_output_path(original: Path) -> Path:
-    """Generate unique output path: {stem}.backtest[_N].jsonl"""
-    stem = original.stem
-    parent = original.parent
-    base = parent / f"{stem}.backtest.jsonl"
-    if not base.exists():
-        return base
-    i = 1
-    while True:
-        candidate = parent / f"{stem}.backtest_{i}.jsonl"
-        if not candidate.exists():
-            return candidate
-        i += 1

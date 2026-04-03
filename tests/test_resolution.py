@@ -263,3 +263,101 @@ class TestResolvePending:
             trader.resolver._resolve_pending()
 
         assert pos._resolve_fail_count == 1
+
+    def test_error_count_accumulates_within_window(self, trader_setup):
+        """Multiple errors within 60s accumulate count (line 92)."""
+        trader, state = trader_setup
+        pos = _make_position(slug="multi-error-slug")
+        pos.state = PositionState.PAPER
+        pos.side = "up"
+        pos.buy_price = 0.98
+        trader.positions["favorite"]["multi-error-slug"] = pos
+
+        with patch.object(trader.resolver, '_check_and_queue_resolve', side_effect=Exception("CLOB down")):
+            trader.resolver._resolve_pending()
+            trader.resolver._resolve_pending()
+
+        assert pos._resolve_fail_count == 2
+
+    def test_error_warns_at_three_failures(self, trader_setup):
+        """After 3 failures in 60s, should log a warning (line 94)."""
+        trader, state = trader_setup
+        pos = _make_position(slug="warn-slug")
+        pos.state = PositionState.PAPER
+        pos.side = "up"
+        pos.buy_price = 0.98
+        trader.positions["favorite"]["warn-slug"] = pos
+
+        with patch.object(trader.resolver, '_check_and_queue_resolve', side_effect=Exception("CLOB down")):
+            for _ in range(3):
+                trader.resolver._resolve_pending()
+
+        assert pos._resolve_fail_count >= 3
+
+    def test_success_resets_fail_count(self, trader_setup):
+        """Successful resolution resets fail count to 0."""
+        trader, state = trader_setup
+        pos = _make_position(slug="reset-slug")
+        pos.state = PositionState.PAPER
+        pos.side = "up"
+        pos.buy_price = 0.98
+        pos._resolve_fail_since = time.time()
+        pos._resolve_fail_count = 2
+        trader.positions["favorite"]["reset-slug"] = pos
+
+        with patch("timba.resolution.resolve_winner", return_value=True):
+            trader.resolver._resolve_pending()
+
+        assert pos._resolve_fail_count == 0
+        assert pos._resolve_fail_since == 0
+
+    def test_error_window_resets_after_60s(self, trader_setup):
+        """Failure window resets if >60s since first failure (line 88-90)."""
+        trader, state = trader_setup
+        pos = _make_position(slug="window-reset-slug")
+        pos.state = PositionState.PAPER
+        pos.side = "up"
+        pos.buy_price = 0.98
+        # Simulate a failure that happened 70s ago
+        pos._resolve_fail_since = time.time() - 70
+        pos._resolve_fail_count = 2
+        trader.positions["favorite"]["window-reset-slug"] = pos
+
+        with patch.object(trader.resolver, '_check_and_queue_resolve', side_effect=Exception("CLOB down")):
+            trader.resolver._resolve_pending()
+
+        # Window should have reset — count back to 1
+        assert pos._resolve_fail_count == 1
+
+
+class TestRunLoop:
+    """Test run_loop method (lines 60-66)."""
+
+    def test_run_loop_calls_resolve_pending(self, trader_setup):
+        """run_loop calls _resolve_pending while is_running returns True."""
+        trader, state = trader_setup
+
+        call_count = [0]
+        def mock_is_running():
+            call_count[0] += 1
+            return call_count[0] <= 1  # Run once then stop
+
+        with patch.object(trader.resolver, '_resolve_pending') as mock_resolve, \
+             patch("timba.resolution.time.sleep"):
+            trader.resolver.run_loop(mock_is_running)
+
+        mock_resolve.assert_called_once()
+
+    def test_run_loop_catches_exceptions(self, trader_setup):
+        """run_loop catches exceptions from _resolve_pending (lines 64-65)."""
+        trader, state = trader_setup
+
+        call_count = [0]
+        def mock_is_running():
+            call_count[0] += 1
+            return call_count[0] <= 2  # Run twice then stop
+
+        with patch.object(trader.resolver, '_resolve_pending', side_effect=Exception("unexpected")), \
+             patch("timba.resolution.time.sleep"):
+            # Should not raise
+            trader.resolver.run_loop(mock_is_running)

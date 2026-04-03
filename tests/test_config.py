@@ -118,6 +118,82 @@ favorite:
         fav = cfg.get_strategy("favorite")
         assert fav is not None
 
+    def test_reserved_keys_skipped(self, tmp_path):
+        """Top-level reserved keys (log_level, polymarket) are not treated as strategies (line 105)."""
+        cfg_file = tmp_path / "reserved.yaml"
+        cfg_file.write_text("log_level: DEBUG\npolymarket:\n  max_workers: 5\n")
+        cfg = Config.load(cfg_file)
+        assert cfg.log_level == "DEBUG"
+        assert cfg.max_workers == 5
+        assert len(cfg.strategies) == 0
+
+    def test_get_discovery_markets_skips_disabled(self, tmp_path):
+        """get_discovery_markets skips disabled strategies (line 123)."""
+        cfg_file = tmp_path / "disabled.yaml"
+        cfg_file.write_text("""
+favorite:
+  enabled: false
+  markets:
+    - coin: btc
+      interval: 5m
+      entry_window_sec: 10
+      close_window_sec: 3
+""")
+        cfg = Config.load(cfg_file)
+        assert cfg.get_discovery_markets() == []
+
+    def test_get_all_coins_returns_enabled(self, tmp_path):
+        """get_all_coins returns coins from enabled strategies (line 144)."""
+        cfg_file = tmp_path / "coins.yaml"
+        cfg_file.write_text("""
+favorite:
+  enabled: true
+  markets:
+    - coin: btc
+      interval: 5m
+      entry_window_sec: 10
+      close_window_sec: 3
+    - coin: eth
+      interval: 5m
+      entry_window_sec: 10
+      close_window_sec: 3
+""")
+        cfg = Config.load(cfg_file)
+        coins = cfg.get_all_coins()
+        assert set(coins) == {"btc", "eth"}
+
+    def test_calculate_portfolio_skips_disabled(self, tmp_path):
+        """calculate_portfolio skips disabled strategies (line 155)."""
+        cfg_file = tmp_path / "portfolio.yaml"
+        cfg_file.write_text("""
+favorite:
+  enabled: false
+  contracts_per_trade: 10
+  markets:
+    - coin: btc
+      interval: 5m
+      mode: live
+      entry_window_sec: 10
+      close_window_sec: 3
+""")
+        cfg = Config.load(cfg_file)
+        assert cfg.calculate_portfolio() == 0
+
+
+class TestStrategyConfigEdgeCases:
+    def test_getattr_private_raises(self):
+        """StrategyConfig.__getattr__ raises AttributeError for private attrs (line 49)."""
+        from timba.config import StrategyConfig
+        sc = StrategyConfig({"key": "val"})
+        with pytest.raises(AttributeError, match="_private"):
+            sc._private
+
+    def test_repr(self):
+        """StrategyConfig.__repr__ returns readable string (line 53)."""
+        from timba.config import StrategyConfig
+        sc = StrategyConfig({"enabled": True})
+        assert repr(sc) == "StrategyConfig({'enabled': True})"
+
 
 class TestSchemaEdgeCases:
     def test_validate_returns_empty_when_jsonschema_missing(self, monkeypatch):

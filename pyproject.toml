@@ -10,14 +10,12 @@ dependencies = [
     "polymarket-apis>=0.5.3,<0.6",
     "py-builder-relayer-client>=0.0.1,<0.1",
     "py-builder-signing-sdk>=0.0.2,<0.1",
-    "jsonschema>=4.20",
-    "pyyaml>=6.0",
-    "requests>=2.33",
-    "pyfiglet>=1.0",
-    "pygments>=2.20",
-    "rich>=14.3.3",
-    "aiohttp>=3.13.4",
-    "tzdata>=2024.1",
+    "jsonschema>=4.20,<5",
+    "pyyaml>=6.0,<7",
+    "requests>=2.33,<3",
+    "pyfiglet>=1.0,<2",
+    "rich>=14.0,<15",
+    "tzdata>=2024.1; sys_platform == 'win32'",
     "web3>=7.0,<8",
 ]
 
@@ -25,7 +23,6 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
-    "pytest-mock>=3.12",
     "pip-audit>=2.7",
     "ruff>=0.11",
     "bandit>=1.8",
@@ -56,7 +53,10 @@ target-version = "py312"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["F", "I"]  # pyflakes (unused imports, undefined names) + isort
+select = ["F", "I", "ANN"]  # pyflakes + isort + type annotations
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]  # test functions don't need type annotations
 
 [tool.bandit]
 exclude_dirs = ["tests"]

@@ -86,6 +86,7 @@ class TestBotDiscoversMarkets:
 
         trader = Trader(paper_config, state, data_dir=str(tmp_path / "data"))
         trader._discover_and_register()
+        trader._drain_mutations()
 
         assert len(_favorite_positions(trader)) == 1
         assert mock_market.slug in _favorite_positions(trader)
@@ -112,6 +113,7 @@ class TestBotDiscoversMarkets:
 
         trader = Trader(paper_config, state, data_dir=str(tmp_path / "data"))
         trader._discover_and_register()
+        trader._drain_mutations()
         assert len(_favorite_positions(trader)) == 0
 
     @patch("timba.trader.PriceFeed")
@@ -131,6 +133,7 @@ class TestBotDiscoversMarkets:
 
         trader = Trader(paper_config, state, data_dir=str(tmp_path / "data"))
         trader._discover_and_register()
+        trader._drain_mutations()
 
         pos = _favorite_positions(trader)[mock_market.slug]
         assert pos.state == PositionState.WATCHING
@@ -153,6 +156,7 @@ class TestBotDiscoversMarkets:
 
         trader = Trader(paper_config, state, data_dir=str(tmp_path / "data"))
         trader._discover_and_register()
+        trader._drain_mutations()
         assert mock_market.slug in _favorite_positions(trader)
 
     @patch("timba.trader.PriceFeed")
@@ -169,12 +173,14 @@ class TestBotDiscoversMarkets:
 
         trader = Trader(paper_config, state, data_dir=str(tmp_path / "data"))
         trader._discover_and_register()
+        trader._drain_mutations()
         assert len(_favorite_positions(trader)) == 1
 
         trader._seen_slugs["favorite"][mock_market.slug] = time.time()
         del trader.positions["favorite"][mock_market.slug]
 
         trader._discover_and_register()
+        trader._drain_mutations()
         assert len(_favorite_positions(trader)) == 0
 
 

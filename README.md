@@ -15,7 +15,7 @@ Automated trading bot for [Polymarket](https://polymarket.com)'s recurring crypt
 
 ### Install
 
-**Binary**
+#### Binary
 
 Installs a standalone binary and default config to `~/.timba/config.yaml`.
 
@@ -121,11 +121,14 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 | `timba stop` | Stop the running bot |
 | `timba status` | Show bot status and P&L |
 | `timba monitor` | Live dashboard with trades and per-coin stats |
+| `timba config` | Show current configuration (`--raw` for YAML, `-v` for per-market details) |
 | `timba check-wallet` | Verify Polymarket credentials |
 | `timba backtest` | Replay historical data through strategies |
 | `timba analyze trades` | Trade history breakdown |
 | `timba analyze ticks` | EV calibration check |
 | `timba init` | Reconfigure credentials |
+| `timba test-live` | Test order lifecycle (place + cancel) |
+| `timba backtest-clean` | Delete backtest data |
 
 ## Build from Source
 

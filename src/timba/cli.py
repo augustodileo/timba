@@ -1,5 +1,7 @@
 """CLI entry point for timba."""
 
+from __future__ import annotations
+
 import argparse
 import getpass
 import json
@@ -8,11 +10,15 @@ import os
 import sys
 import time as _time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import requests
 
 # NO heavy imports at module level -- lazy import inside command handlers
 from timba.version import get_version
+
+if TYPE_CHECKING:
+    from timba.config import Config
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,7 +63,7 @@ def _resolve_config(explicit: str | None) -> Path:
     sys.exit(1)
 
 
-def _load_env():
+def _load_env() -> None:
     """Source ~/.timba/.env if secrets aren't already set."""
     if os.environ.get("POLYMARKET_PRIVATE_KEY"):
         return  # already in environment
@@ -100,7 +106,7 @@ def _data_dir() -> Path:
     return d
 
 
-def _setup_logging(log_level: str):
+def _setup_logging(log_level: str) -> None:
     """Configure logging with the given level string."""
     level = getattr(logging, log_level.upper())
     logging.basicConfig(
@@ -114,7 +120,7 @@ def _setup_logging(log_level: str):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
-def _print_market_table(config):
+def _print_market_table(config: Config) -> None:
     """Print the market mode table for each enabled strategy."""
     for name, scfg in config.strategies.items():
         if not scfg.enabled or not scfg.markets:
@@ -149,7 +155,7 @@ def _print_market_table(config):
     sys.stdout.flush()
 
 
-def _check_geoblock():
+def _check_geoblock() -> None:
     """Check if the current IP is blocked by Polymarket. Exits if blocked."""
     try:
         resp = requests.get("https://polymarket.com/api/geoblock", timeout=10)
@@ -167,7 +173,7 @@ def _check_geoblock():
         print(f"  Geoblock check failed: {e} (continuing anyway)")
 
 
-def _check_wallet(config):
+def _check_wallet(config: Config) -> None:
     """Verify wallet credentials and print account info."""
     from polymarket_apis import PolymarketClobClient
 
@@ -218,7 +224,7 @@ def _check_wallet(config):
     print("\nWallet check passed. Ready for live trading.")
 
 
-def _test_live_order(config):
+def _test_live_order(config: Config) -> None:
     """Place a test order at $0.01 (will never fill), verify it exists, then cancel it."""
     from polymarket_apis import PolymarketClobClient
     from polymarket_apis.types.clob_types import OrderArgs
@@ -312,7 +318,7 @@ def _test_live_order(config):
 # Bot lifecycle helpers
 # ---------------------------------------------------------------------------
 
-def _write_bot_json(port: int):
+def _write_bot_json(port: int) -> None:
     """Write bot.json with PID and port to ~/.timba/."""
     home = _timba_home()
     home.mkdir(parents=True, exist_ok=True)
@@ -320,7 +326,7 @@ def _write_bot_json(port: int):
     bot_json.write_text(json.dumps({"pid": os.getpid(), "port": port}))
 
 
-def _remove_bot_json():
+def _remove_bot_json() -> None:
     """Remove bot.json on shutdown."""
     try:
         bot_json = _timba_home() / "bot.json"
@@ -342,7 +348,7 @@ def _ensure_initialized() -> bool:
     return (home / ".env").exists()
 
 
-def _prompt_env(env_path: Path):
+def _prompt_env(env_path: Path) -> None:
     """Prompt for credentials and write .env."""
     print()
     pk = getpass.getpass("  Polymarket private key: ")
@@ -357,8 +363,21 @@ RELAYER_API_KEY=
 RELAYER_API_KEY_ADDRESS=
 """
     env_path.write_text(content)
-    env_path.chmod(0o600)
-    print("  Saved .env (owner read+write only)")
+    if sys.platform != "win32":
+        env_path.chmod(0o600)
+        print("  Saved .env (owner read+write only)")
+    else:
+        # Restrict to current user via Windows ACLs
+        import subprocess
+        try:
+            subprocess.run(
+                ["icacls", str(env_path), "/inheritance:r",
+                 "/grant:r", f"{os.getlogin()}:(R,W)"],
+                capture_output=True, check=True,
+            )
+            print("  Saved .env (restricted to current user)")
+        except (subprocess.CalledProcessError, OSError):
+            print("  Saved .env (could not restrict permissions — check file ACLs manually)")
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +386,7 @@ RELAYER_API_KEY_ADDRESS=
 
 # -- init ------------------------------------------------------------------
 
-def cmd_init(args):
+def cmd_init(args: argparse.Namespace) -> None:
     """Set up credentials in ~/.timba/. Config is provided by the installer."""
     home = _timba_home()
     home.mkdir(parents=True, exist_ok=True)
@@ -396,7 +415,7 @@ def cmd_init(args):
 
 # -- start -----------------------------------------------------------------
 
-def cmd_start(args):
+def cmd_start(args: argparse.Namespace) -> None:
     """Start the bot. Auto-initializes if needed."""
     import atexit
     import signal
@@ -489,12 +508,13 @@ def cmd_start(args):
     logging.getLogger("timba").addHandler(log_handler)
 
     # Signal handlers to set shutdown event
-    def _signal_handler(signum, frame):
+    def _signal_handler(signum: int, frame: object) -> None:
         logging.getLogger(__name__).info("Received signal %d, shutting down...", signum)
         shutdown_event.set()
 
-    signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
+    if sys.platform != "win32":
+        signal.signal(signal.SIGTERM, _signal_handler)
 
     trader.run(shutdown_event=shutdown_event)
 
@@ -505,7 +525,7 @@ def cmd_start(args):
 
 # -- stop ------------------------------------------------------------------
 
-def cmd_stop(args):
+def cmd_stop(args: argparse.Namespace) -> None:
     """Stop the running bot via HTTP API."""
     from timba.client import BotClient
 
@@ -523,7 +543,7 @@ def cmd_stop(args):
 
 # -- status ----------------------------------------------------------------
 
-def cmd_status(args):
+def cmd_status(args: argparse.Namespace) -> None:
     """Query running bot status via HTTP API."""
     from collections import Counter
 
@@ -598,7 +618,7 @@ def cmd_status(args):
 
 # -- monitor ---------------------------------------------------------------
 
-def cmd_monitor(args):
+def cmd_monitor(args: argparse.Namespace) -> None:
     """Live dashboard — polls bot API and renders with Rich."""
     import time
     from collections import Counter
@@ -617,7 +637,7 @@ def cmd_monitor(args):
     interval = args.interval
     console = Console()
 
-    def render():
+    def render() -> object:
         banner = _banner().rstrip()
 
         if not client.is_running():
@@ -664,7 +684,7 @@ def cmd_monitor(args):
             fw = type_counts.get("fail_win", 0) + type_counts.get("fail_loss", 0)
             sw = sum(type_counts.get(k, 0) for k in ("skip_win", "skip_loss", "skip_none"))
 
-            def _pnl_rate(filtered, total):
+            def _pnl_rate(filtered: list[dict], total: float) -> str:
                 if not filtered:
                     return ""
                 first = min((t.get("sniped_at", "") for t in filtered), default="")
@@ -705,7 +725,7 @@ def cmd_monitor(args):
             lines.append(skip_line)
 
         # Recent trades
-        def _fmt_trade(t):
+        def _fmt_trade(t: dict) -> str:
             won = t["type"].endswith("_win") or t["type"] == "win"
             r = "[green]W[/]" if won else "[red]L[/]"
             _coin, _iv = parse_slug(t.get("slug", ""))
@@ -764,7 +784,7 @@ def cmd_monitor(args):
             paper_t = {"bw": 0, "bl": 0, "fw": 0, "fl": 0, "sw": 0, "sl": 0, "pnl": 0.0}
             prev_coin = None
 
-            def _wl(w, l):
+            def _wl(w: int, l: int) -> str:
                 return f"{w}W/{l}L" if w + l > 0 else "—"
 
             for coin, iv in sorted_keys:
@@ -906,7 +926,7 @@ def cmd_monitor(args):
 
 # -- check-wallet ----------------------------------------------------------
 
-def cmd_check_wallet(args):
+def cmd_check_wallet(args: argparse.Namespace) -> None:
     """Verify wallet credentials (no bot needed)."""
     from timba.config import Config
     from timba.schema import ConfigValidationError
@@ -923,7 +943,7 @@ def cmd_check_wallet(args):
 
 # -- test-live --------------------------------------------------------------
 
-def cmd_test_live(args):
+def cmd_test_live(args: argparse.Namespace) -> None:
     """Test the full order lifecycle (no bot needed)."""
     from timba.config import Config
     from timba.schema import ConfigValidationError
@@ -941,7 +961,7 @@ def cmd_test_live(args):
 
 # -- backtest ---------------------------------------------------------------
 
-def cmd_backtest(args):
+def cmd_backtest(args: argparse.Namespace) -> None:
     """Run full backtest from historical tick data."""
     from timba.config import Config
     from timba.schema import ConfigValidationError
@@ -967,7 +987,7 @@ def cmd_backtest(args):
 
 # -- analyze trades ---------------------------------------------------------
 
-def cmd_analyze_trades(args):
+def cmd_analyze_trades(args: argparse.Namespace) -> None:
     """Analyze trade results: price distribution, PnL breakdowns."""
     from timba.config import Config
     from timba.schema import ConfigValidationError
@@ -992,7 +1012,7 @@ def cmd_analyze_trades(args):
 
 # -- analyze ticks ----------------------------------------------------------
 
-def cmd_analyze_ticks(args):
+def cmd_analyze_ticks(args: argparse.Namespace) -> None:
     """Analyze tick EVs vs actual trade outcomes."""
     from timba.config import Config
     from timba.schema import ConfigValidationError
@@ -1014,9 +1034,86 @@ def cmd_analyze_ticks(args):
     analyze_ticks_main(data_dir, coin=args.coin, interval=args.interval, strategy=args.strategy)
 
 
+# -- config -----------------------------------------------------------------
+
+def cmd_config(args: argparse.Namespace) -> None:
+    """Show current configuration."""
+    from timba.config import Config
+    from timba.schema import ConfigValidationError
+
+    config_path = _resolve_config(args.config)
+    _load_env()
+
+    if args.raw:
+        with open(config_path) as f:
+            print(f.read(), end="")
+        return
+
+    try:
+        config = Config.load(config_path)
+    except ConfigValidationError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Config: {config_path}")
+    print(f"Log level: {config.log_level}")
+    print()
+
+    for name, scfg in config.strategies.items():
+        status = "[green]enabled[/]" if scfg.enabled else "[dim]disabled[/]"
+        if not args.no_color:
+            from rich import print as rprint
+            rprint(f"  {name}: {status}")
+        else:
+            print(f"  {name}: {'enabled' if scfg.enabled else 'disabled'}")
+
+        if not scfg.enabled:
+            continue
+
+        # Show strategy-level settings
+        for key in ["min_price", "min_signal_chg", "contracts_per_trade", "resolve_delay_sec"]:
+            val = scfg.get(key)
+            if val is not None:
+                print(f"    {key}: {val}")
+
+        # Summarize markets
+        markets = scfg.markets
+        if not markets:
+            print("    markets: none")
+            continue
+
+        by_mode: dict[str, int] = {}
+        by_interval: dict[str, int] = {}
+        coins = set()
+        for m in markets:
+            mode = m.get("mode", "paper")
+            by_mode[mode] = by_mode.get(mode, 0) + 1
+            iv = m.get("interval", "?")
+            by_interval[iv] = by_interval.get(iv, 0) + 1
+            coins.add(m.get("coin", "?"))
+
+        mode_str = ", ".join(f"{c} {m}" for m, c in sorted(by_mode.items()))
+        iv_str = ", ".join(f"{c}×{iv}" for iv, c in sorted(by_interval.items()))
+        print(f"    markets: {len(markets)} ({len(coins)} coins: {', '.join(sorted(coins))})")
+        print(f"    modes: {mode_str}")
+        print(f"    intervals: {iv_str}")
+
+        # Per-market detail if --verbose
+        if args.verbose:
+            print()
+            for m in sorted(markets, key=lambda x: (x.get("coin", ""), x.get("interval", ""))):
+                coin = m.get("coin", "?").upper()
+                iv = m.get("interval", "?")
+                mode = m.get("mode", "paper")
+                entry = m.get("entry_window_sec", "?")
+                close = m.get("close_window_sec", "?")
+                print(f"      {coin:>5} {iv:<4} {mode:<6} entry={entry}s close={close}s")
+    print()
+
+
 # -- backtest-clean ---------------------------------------------------------
 
-def cmd_backtest_clean(args):
+def cmd_backtest_clean(args: argparse.Namespace) -> None:
     """Delete backtest data directory."""
     import shutil
 
@@ -1133,6 +1230,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interval", help="Filter by interval")
     p.set_defaults(func=cmd_analyze_ticks)
 
+    # -- config --
+    p = sub.add_parser("config", help="Show current configuration")
+    p.add_argument("--config", help="Path to config file")
+    p.add_argument("--raw", action="store_true", help="Print raw config.yaml")
+    p.add_argument("--verbose", "-v", action="store_true", help="Show per-market details")
+    p.add_argument("--no-color", action="store_true", help="Disable color output")
+    p.set_defaults(func=cmd_config)
+
     # -- backtest-clean --
     p = sub.add_parser("backtest-clean", help="Delete backtest data")
     p.add_argument("--config", help="Path to config file")
@@ -1141,7 +1246,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main():
+def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 

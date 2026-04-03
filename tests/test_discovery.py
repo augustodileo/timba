@@ -1,5 +1,6 @@
 """Tests for discovery.py — market discovery and position registration."""
 
+import queue
 import time
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +9,12 @@ from timba.discovery import DiscoveryWorker
 from timba.market import UpDownMarket
 from timba.market_cache import MarketCache
 from timba.strategies.favorite import FavoriteStrategy
+
+
+def _drain(mutations, positions):
+    """Apply all queued mutations (same as Trader._drain_mutations)."""
+    while not mutations.empty():
+        mutations.get_nowait()()
 
 
 def _make_config(tmp_path, coin="btc", interval="5m", mode="paper"):
@@ -57,6 +64,7 @@ def _make_worker(config, data_dir="/tmp/test"):
     strategies = {"favorite": strat}
     strategy_configs = {"favorite": (gcfg_raw, markets_list)}
     market_cache = MagicMock(spec=MarketCache)
+    mutations = queue.Queue()
 
     worker = DiscoveryWorker(
         config=config,
@@ -65,9 +73,10 @@ def _make_worker(config, data_dir="/tmp/test"):
         strategies=strategies,
         strategy_configs=strategy_configs,
         market_cache=market_cache,
+        mutations=mutations,
         data_dir=data_dir,
     )
-    return worker, positions, seen_slugs, market_cache
+    return worker, positions, seen_slugs, market_cache, mutations
 
 
 class TestDiscoverAndRegister:
@@ -75,11 +84,12 @@ class TestDiscoverAndRegister:
     @patch("timba.discovery.market_mod.discover_active_markets")
     def test_registers_new_market(self, mock_discover, tmp_path):
         config = _make_config(tmp_path)
-        worker, positions, _, cache = _make_worker(config)
+        worker, positions, _, cache, mutations = _make_worker(config)
         mkt = _make_market(remaining=30)
         mock_discover.return_value = [mkt]
 
         worker.discover_and_register()
+        _drain(mutations, positions)
 
         assert mkt.slug in positions["favorite"]
         cache.track.assert_called_once_with(mkt.slug, mkt.token_id_up, mkt.token_id_down)
@@ -87,23 +97,25 @@ class TestDiscoverAndRegister:
     @patch("timba.discovery.market_mod.discover_active_markets")
     def test_skips_expired_market(self, mock_discover, tmp_path):
         config = _make_config(tmp_path)
-        worker, positions, _, _ = _make_worker(config)
+        worker, positions, _, _, mutations = _make_worker(config)
         mkt = _make_market(remaining=1)  # < 3s remaining
         mock_discover.return_value = [mkt]
 
         worker.discover_and_register()
+        _drain(mutations, positions)
 
         assert len(positions["favorite"]) == 0
 
     @patch("timba.discovery.market_mod.discover_active_markets")
     def test_skips_already_registered(self, mock_discover, tmp_path):
         config = _make_config(tmp_path)
-        worker, positions, _, _ = _make_worker(config)
+        worker, positions, _, _, mutations = _make_worker(config)
         mkt = _make_market(remaining=30)
         positions["favorite"][mkt.slug] = MagicMock()
         mock_discover.return_value = [mkt]
 
         worker.discover_and_register()
+        _drain(mutations, positions)
 
         # Still just the original mock, no new position created
         assert isinstance(positions["favorite"][mkt.slug], MagicMock)
@@ -111,59 +123,64 @@ class TestDiscoverAndRegister:
     @patch("timba.discovery.market_mod.discover_active_markets")
     def test_skips_seen_slugs(self, mock_discover, tmp_path):
         config = _make_config(tmp_path)
-        worker, positions, seen, _ = _make_worker(config)
+        worker, positions, seen, _, mutations = _make_worker(config)
         mkt = _make_market(remaining=30)
         seen["favorite"][mkt.slug] = time.time()
         mock_discover.return_value = [mkt]
 
         worker.discover_and_register()
+        _drain(mutations, positions)
 
         assert mkt.slug not in positions["favorite"]
 
     @patch("timba.discovery.market_mod.discover_active_markets")
     def test_skips_unconfigured_coin(self, mock_discover, tmp_path):
         config = _make_config(tmp_path, coin="btc")
-        worker, positions, _, _ = _make_worker(config)
+        worker, positions, _, _, mutations = _make_worker(config)
         mkt = _make_market(coin="eth", remaining=30)  # config has btc, not eth
         mock_discover.return_value = [mkt]
 
         worker.discover_and_register()
+        _drain(mutations, positions)
 
         assert len(positions["favorite"]) == 0
 
     @patch("timba.discovery.market_mod.discover_active_markets")
     def test_skips_mode_off(self, mock_discover, tmp_path):
         config = _make_config(tmp_path, mode="off")
-        worker, positions, _, _ = _make_worker(config)
+        worker, positions, _, _, mutations = _make_worker(config)
         mkt = _make_market(remaining=30)
         mock_discover.return_value = [mkt]
 
         worker.discover_and_register()
+        _drain(mutations, positions)
 
         assert len(positions["favorite"]) == 0
 
     @patch("timba.discovery.market_mod.discover_active_markets")
     def test_skips_market_not_yet_started(self, mock_discover, tmp_path):
         config = _make_config(tmp_path)
-        worker, positions, _, _ = _make_worker(config)
+        worker, positions, _, _, mutations = _make_worker(config)
         # Market ends in 600s but interval is 300s, so it started 300s ago — OK
         # But if remaining > interval_sec, it hasn't started yet
         mkt = _make_market(remaining=600)  # 5m interval = 300s, remaining 600 > 300
         mock_discover.return_value = [mkt]
 
         worker.discover_and_register()
+        _drain(mutations, positions)
 
         assert len(positions["favorite"]) == 0
 
     @patch("timba.discovery.market_mod.discover_active_markets")
     def test_mid_window_sets_skip_flag(self, mock_discover, tmp_path):
         config = _make_config(tmp_path)
-        worker, positions, _, _ = _make_worker(config)
+        worker, positions, _, _, mutations = _make_worker(config)
         # entry_window=10, close_window=3 — mid-window means remaining between 3 and 10
         mkt = _make_market(remaining=7)
         mock_discover.return_value = [mkt]
 
         worker.discover_and_register()
+        _drain(mutations, positions)
 
         pos = positions["favorite"][mkt.slug]
         assert pos._skip_first_window is True
@@ -171,12 +188,13 @@ class TestDiscoverAndRegister:
     @patch("timba.discovery.market_mod.discover_active_markets")
     def test_early_window_no_skip_flag(self, mock_discover, tmp_path):
         config = _make_config(tmp_path)
-        worker, positions, _, _ = _make_worker(config)
+        worker, positions, _, _, mutations = _make_worker(config)
         # remaining=30 > entry_window=10 → not in entry window yet
         mkt = _make_market(remaining=30)
         mock_discover.return_value = [mkt]
 
         worker.discover_and_register()
+        _drain(mutations, positions)
 
         pos = positions["favorite"][mkt.slug]
         assert pos._skip_first_window is False
@@ -186,7 +204,7 @@ class TestBuildSeriesList:
 
     def test_builds_from_config(self, tmp_path):
         config = _make_config(tmp_path, coin="btc", interval="5m")
-        worker, _, _, _ = _make_worker(config)
+        worker, _, _, _, _ = _make_worker(config)
 
         series = worker._build_series_list()
 
@@ -202,7 +220,7 @@ class TestRunLoop:
     @patch("timba.discovery.time.sleep")
     def test_run_loop_calls_discover(self, mock_sleep, mock_discover, tmp_path):
         config = _make_config(tmp_path)
-        worker, _, _, _ = _make_worker(config)
+        worker, _, _, _, _ = _make_worker(config)
         mock_discover.return_value = []
 
         call_count = 0
@@ -220,7 +238,7 @@ class TestRunLoop:
     @patch("timba.discovery.time.sleep")
     def test_run_loop_survives_error(self, mock_sleep, mock_discover, tmp_path):
         config = _make_config(tmp_path)
-        worker, _, _, _ = _make_worker(config)
+        worker, _, _, _, _ = _make_worker(config)
         mock_discover.side_effect = [Exception("API down"), []]
 
         # run_loop checks is_running() on every sleep(1) in the interval loop,

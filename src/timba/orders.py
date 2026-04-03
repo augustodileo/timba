@@ -30,23 +30,21 @@ TICK_WAIT_POLL_SEC = 0.5
 class OrderManager:
     """Manages order placement for both paper and live modes.
 
-    Thread safety: _cash_lock serializes all reads/writes to
-    state.available_cash and state.reserved_cash across the
-    eval pool workers and the main-loop mutation drains.
+    Thread safety: all cash operations go through State methods which
+    hold State._lock internally. This serializes eval pool workers
+    and mutation drains without an external lock.
     """
 
     def __init__(
         self,
         config: Config,
         state: State,
-        cash_lock: threading.Lock,
         mutations: queue.Queue,
         market_cache: MarketCache,
-        api_creds,
-    ):
+        api_creds: object,
+    ) -> None:
         self._config = config
         self._state = state
-        self._cash_lock = cash_lock
         self._mutations = mutations
         self._market_cache = market_cache
         self._api_creds = api_creds
@@ -57,16 +55,12 @@ class OrderManager:
 
     def execute_bet(
         self, name: str, strat: Strategy, pos: MarketPosition, decision: BetDecision,
-    ):
+    ) -> None:
         """Check cash, log the bet, spawn an order thread.
 
         Called from the eval ThreadPoolExecutor — must be thread-safe
         with respect to cash operations.
         """
-        pos.side = decision.side
-        pos.buy_price = decision.price
-        pos.contracts = decision.size
-
         order_price = round(decision.price, 4)
         cost = order_price * decision.size
 
@@ -80,20 +74,21 @@ class OrderManager:
         # Cash check (live only — atomic check-and-reserve to prevent
         # two pool workers from double-spending the same cash)
         if pos.market_mode != "paper":
-            with self._cash_lock:
-                if self._state.available_cash < cost:
-                    pos.transition(
-                        PositionState.SKIPPED,
-                        skip_reason=(
-                            f"insufficient funds (need ${cost:.2f}, "
-                            f"have ${self._state.available_cash:.2f})"
-                        ),
-                    )
-                    return
-                self._state.reserved_cash += cost
+            if not self._state.try_reserve(cost):
+                pos.transition(
+                    PositionState.SKIPPED,
+                    skip_reason=(
+                        f"insufficient funds (need ${cost:.2f}, "
+                        f"have ${self._state.available_cash:.2f})"
+                    ),
+                )
+                return
 
         pos.transition(
             PositionState.PENDING_ORDER,
+            side=decision.side,
+            buy_price=decision.price,
+            contracts=decision.size,
             sniped_at=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -109,22 +104,19 @@ class OrderManager:
     # Mutation callbacks (executed on the main thread via _drain_mutations)
     # ------------------------------------------------------------------
 
-    def commit_order_fill(self, actual_cost: float, reserved_cost: float):
+    def commit_order_fill(self, actual_cost: float, reserved_cost: float) -> None:
         """Order filled — deduct cash and release reservation."""
-        with self._cash_lock:
-            self._state.reserved_cash -= reserved_cost
-            self._state.deduct_cash(actual_cost)
+        self._state.commit_fill(actual_cost, reserved_cost)
 
-    def release_order(self, reserved_cost: float):
+    def release_order(self, reserved_cost: float) -> None:
         """Order expired/failed — release cash reservation."""
-        with self._cash_lock:
-            self._state.reserved_cash -= reserved_cost
+        self._state.release_reservation(reserved_cost)
 
     # ------------------------------------------------------------------
     # Background thread (one per order)
     # ------------------------------------------------------------------
 
-    def _create_clob_client(self):
+    def _create_clob_client(self) -> PolymarketClobClient:
         """Create a fresh CLOB client for use in a background thread."""
         client = PolymarketClobClient(
             private_key=self._config.polymarket.private_key,
@@ -137,7 +129,7 @@ class OrderManager:
     def _handle_order(
         self, name: str, strat: Strategy, pos: MarketPosition,
         decision: BetDecision, order_price: float, reserved_cost: float,
-    ):
+    ) -> None:
         """Background thread: wait for tick, place order (or paper-fill), queue mutations.
 
         Same flow for paper and live — only the actual CLOB call differs.

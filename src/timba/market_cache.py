@@ -31,7 +31,7 @@ class MarketSnapshot:
 class MarketCache:
     """Background thread that keeps market data fresh using parallel polling."""
 
-    def __init__(self, clob_client, max_workers: int):
+    def __init__(self, clob_client: object, max_workers: int) -> None:
         self._clob = clob_client
         self._max_workers = max_workers
         self._lock = threading.Lock()
@@ -40,7 +40,7 @@ class MarketCache:
         self._thread: threading.Thread | None = None
         self._running = False
 
-    def track(self, slug: str, token_id_up: str, token_id_down: str, contracts: int = 200):
+    def track(self, slug: str, token_id_up: str, token_id_down: str, contracts: int = 200) -> None:
         """Register a market to track."""
         with self._lock:
             self._markets[slug] = {
@@ -51,7 +51,7 @@ class MarketCache:
             if slug not in self._cache:
                 self._cache[slug] = MarketSnapshot()
 
-    def untrack(self, slug: str):
+    def untrack(self, slug: str) -> None:
         """Stop tracking a market."""
         with self._lock:
             self._markets.pop(slug, None)
@@ -62,7 +62,7 @@ class MarketCache:
         with self._lock:
             return self._cache.get(slug)
 
-    def start(self):
+    def start(self) -> None:
         """Start the background polling thread."""
         if self._running:
             return
@@ -71,13 +71,13 @@ class MarketCache:
         self._thread.start()
         logger.info("MarketCache started (workers=%d)", self._max_workers)
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the background polling thread."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
 
-    def _poll_loop(self):
+    def _poll_loop(self) -> None:
         """Continuously poll all tracked markets in parallel."""
         # Time-windowed per-slug failure tracking: warn at 5 failures in 60s
         _failures: dict[str, tuple[float, int]] = {}  # slug → (window_start, count)
@@ -99,7 +99,12 @@ class MarketCache:
                     for slug, info in slugs:
                         if not self._running:
                             break
-                        futures[pool.submit(self._update_market, slug, info)] = slug
+                        try:
+                            futures[pool.submit(self._update_market, slug, info)] = slug
+                        except RuntimeError:
+                            # Interpreter shutting down — pool is closed
+                            self._running = False
+                            break
 
                     now = time.time()
                     for future in as_completed(futures):
@@ -129,7 +134,7 @@ class MarketCache:
             if self._running:
                 time.sleep(0.1)
 
-    def _update_market(self, slug: str, info: dict):
+    def _update_market(self, slug: str, info: dict) -> None:
         """Poll CLOB for one market and update cache."""
         token_up = info["token_id_up"]
         token_down = info["token_id_down"]

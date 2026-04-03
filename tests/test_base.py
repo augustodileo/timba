@@ -1,7 +1,7 @@
 """Tests for shared framework: base.py helpers (poll_order_fill, place_order, resolve_winner, MarketPosition)."""
 
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -73,14 +73,16 @@ class TestPollOrderFill:
         clob = MagicMock()
         order = MagicMock(size_matched=0, price=0.93)
         clob.get_orders.return_value = [order]
-        size, price = poll_order_fill(clob, "order123", "test")
+        with patch("timba.base.time.sleep"):
+            size, price = poll_order_fill(clob, "order123", "test")
         assert size == 0
         assert price == 0
 
     def test_returns_zero_on_api_failure(self):
         clob = MagicMock()
         clob.get_orders.side_effect = Exception("timeout")
-        size, price = poll_order_fill(clob, "order123", "test")
+        with patch("timba.base.time.sleep"):
+            size, price = poll_order_fill(clob, "order123", "test")
         assert size == 0
         assert price == 0
 
@@ -383,3 +385,60 @@ class TestTransition:
             assert isinstance(source, PositionState)
             for t in targets:
                 assert isinstance(t, PositionState)
+
+
+class TestCheckEntryWindowZeroObservation:
+    def test_observation_window_zero(self):
+        """check_entry_window with entry_window == close_window → progress=1.0 (line 220).
+
+        When entry_window_sec == close_window_sec, observation_window=0.
+        We mock time.time() to control remaining precisely.
+        """
+        from unittest.mock import patch as _patch
+
+        end = 1000
+        # remaining = end - now = 1000 - 990 = 10
+        # entry_window = close_window = 10 → remaining == both → not > entry, not < close
+        p = _make_position(
+            end_timestamp=end,
+            entry_window_sec=10,
+            close_window_sec=10,
+        )
+        with _patch("timba.base.time.time", return_value=990.0):
+            status, remaining, progress = check_entry_window(p)
+        assert status == "active"
+        assert progress == 1.0
+
+
+class TestPollOrderFillCancelException:
+    def test_cancel_exception_suppressed(self):
+        """poll_order_fill suppresses cancel exception (lines 274-275)."""
+        clob = MagicMock()
+        order = MagicMock(size_matched=0, price=0.93)
+        clob.get_orders.return_value = [order]
+        clob.cancel.side_effect = Exception("cancel failed")
+
+        with pytest.MonkeyPatch.context() as m:
+            m.setattr("timba.base.ORDER_POLL_ATTEMPTS", 1)
+            m.setattr("timba.base.ORDER_POLL_INTERVAL", 0)
+            size, price = poll_order_fill(clob, "order123", "test")
+
+        assert size == 0
+        assert price == 0
+        clob.cancel.assert_called_once_with("order123")
+
+
+class TestPlaceOrderNoneResponse:
+    def test_none_response_transitions_to_skipped(self):
+        """place_order with resp=None raises RuntimeError, caught → SKIPPED (line 315)."""
+        p = _make_position(market_mode="live")
+        p.state = PositionState.PENDING_ORDER
+
+        clob = MagicMock()
+        clob.create_and_post_order.return_value = None
+
+        result = place_order(p, "up", 0.93, 200, clob)
+
+        assert result is False
+        assert p.state == PositionState.SKIPPED
+        assert "no response" in p.skip_reason

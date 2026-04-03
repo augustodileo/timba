@@ -12,7 +12,6 @@ To add a new strategy:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
 
 from timba.base import MarketPosition
 from timba.base import PositionState as PositionState
@@ -44,8 +43,6 @@ class BetDecision:
     size: int = 0            # number of contracts
     reason: str = ""         # why we bet or didn't (for skip_reason)
     computed: dict | None = None  # strategy-specific computed values (EVs, signals, etc.)
-                                   # trader writes to {strategy}/evs_*.jsonl
-                                   # backtest writes to {strategy}/evs_*.backtest.*.jsonl
 
 
 class Strategy(ABC):
@@ -69,7 +66,7 @@ class Strategy(ABC):
         self,
         market: UpDownMarket,
         market_cfg: dict,
-        global_cfg: Any,
+        global_cfg: object,
     ) -> MarketPosition:
         """Create a position for a discovered market.
 

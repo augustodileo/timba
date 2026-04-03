@@ -115,3 +115,29 @@ class TestReconcileStartup:
         reconcile_startup(clob, state)
 
         assert state.cash == pytest.approx(100.0)
+
+    def test_cancel_all_failure_survives(self, tmp_data_dir):
+        """If cancel_all raises, reconciliation should continue without crashing."""
+        state = State()
+        state.init_portfolio(100.0)
+
+        mock_order = MagicMock()
+        mock_order.order_id = "order-456"
+        mock_order.price = 0.90
+        mock_order.size = 5
+        mock_order.size_matched = 0
+        mock_order.side = "BUY"
+        mock_order.original_size = 5
+
+        clob = MagicMock()
+        clob.get_orders.return_value = [mock_order]
+        clob.cancel_all.side_effect = Exception("cancel failed")
+        clob.get_usdc_balance.return_value = 100.0
+
+        summary = reconcile_startup(clob, state)
+
+        assert summary["open_orders_found"] == 1
+        assert summary["orders_cancelled"] is False  # cancel failed
+        clob.cancel_all.assert_called_once()
+        # Cash should still be reconciled despite cancel failure
+        assert state.cash == pytest.approx(100.0)

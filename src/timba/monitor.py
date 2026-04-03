@@ -4,6 +4,7 @@ import glob
 import json
 import os
 import sys
+import typing
 from datetime import datetime, timezone
 
 import yaml
@@ -20,7 +21,7 @@ IV_ORDER = {"5m": 0, "15m": 1, "1h": 2, "4h": 3}
 RESERVED_KEYS = {"log_level", "portfolio", "polymarket"}
 
 
-def parse_slug(slug):
+def parse_slug(slug: str) -> tuple[str, str]:
     if "-updown-" in slug:
         parts = slug.split("-")
         return parts[0], parts[2]
@@ -30,7 +31,7 @@ def parse_slug(slug):
     return "", ""
 
 
-def calc_pnl(t):
+def calc_pnl(t: dict) -> float:
     pnl = t.get("pnl", 0)
     if pnl:
         return pnl
@@ -45,11 +46,11 @@ def calc_pnl(t):
     return 0
 
 
-def fmt_pnl(v):
+def fmt_pnl(v: float) -> str:
     return f"[green]+${v:.3f}[/]" if v >= 0 else f"[red]-${abs(v):.3f}[/]"
 
 
-def load_strategy_trades(data_dir, strategy):
+def load_strategy_trades(data_dir: str, strategy: str) -> list[dict]:
     # Scan all SQLite DBs: rotated (bot_*.db) + current (bot.db)
     import sqlite3
     db_files = sorted(glob.glob(os.path.join(data_dir, "bot_*.db")))
@@ -80,24 +81,11 @@ def load_strategy_trades(data_dir, strategy):
         except Exception:
             continue
 
-    if trades:
-        trades.sort(key=lambda t: t.get("sniped_at") or "")
-        return trades
-
-    # Fallback to JSONL (pre-migration data or no bot.db)
-    strat_dir = os.path.join(data_dir, strategy)
-    if os.path.isdir(strat_dir):
-        for tf in sorted(glob.glob(os.path.join(strat_dir, "trades_*.jsonl")))[-3:]:
-            with open(tf) as fh:
-                for line in fh:
-                    try:
-                        trades.append(json.loads(line))
-                    except (json.JSONDecodeError, ValueError):
-                        pass
+    trades.sort(key=lambda t: t.get("sniped_at") or "")
     return trades
 
 
-def fmt_time(ts_str):
+def fmt_time(ts_str: str) -> str:
     try:
         utc_dt = datetime.fromisoformat(ts_str)
         if utc_dt.tzinfo is None:
@@ -107,7 +95,7 @@ def fmt_time(ts_str):
         return ts_str[11:16] if len(ts_str) > 16 else ""
 
 
-def build_overview_and_trades(state, strategies, data_dir, bot_env, enabled_strategies=None):
+def build_overview_and_trades(state: dict, strategies: dict, data_dir: str, bot_env: str, enabled_strategies: set[str] | None = None) -> Panel:
     """Build overview panel with trades underneath, inside one panel."""
     code_ver = state.get("code_version", "?")
     portfolio = state.get("portfolio", 0)
@@ -154,7 +142,7 @@ def build_overview_and_trades(state, strategies, data_dir, bot_env, enabled_stra
         skip_s = sum(1 for t in trades if t.get("type") == "skip_none")
 
         # PnL per hour helper
-        def _pnl_rate(trade_filter, total):
+        def _pnl_rate(trade_filter: typing.Callable[[dict], bool], total: float) -> str:
             filtered = [t for t in trades if trade_filter(t)]
             first = min((t.get("sniped_at", "") for t in filtered), default="")
             if not first:
@@ -173,7 +161,7 @@ def build_overview_and_trades(state, strategies, data_dir, bot_env, enabled_stra
         lines.append("")
         lines.append(f"[bold]{sname.upper()}[/]")
 
-        def _wl_line(label, wins, losses):
+        def _wl_line(label: str, wins: int, losses: int) -> str | None:
             total = wins + losses
             if total == 0:
                 return None
@@ -222,7 +210,7 @@ def build_overview_and_trades(state, strategies, data_dir, bot_env, enabled_stra
             t["_strategy"] = sname
             all_trades.append(t)
 
-    def _fmt_trade(t):
+    def _fmt_trade(t: dict) -> str:
         won = t["type"].endswith("_win") or t["type"] == "win"
         r = "[green]W[/]" if won else "[red]L[/]"
         _coin, _iv = parse_slug(t.get("slug", ""))
@@ -257,7 +245,7 @@ def build_overview_and_trades(state, strategies, data_dir, bot_env, enabled_stra
     return Panel("\n".join(lines), title=f"[bold]MONITOR[/] [dim]({bot_env})[/]  {now}", border_style="blue")
 
 
-def build_strategy_table(sname, scfg, data_dir):
+def build_strategy_table(sname: str, scfg: dict, data_dir: str) -> Table | None:
     markets = scfg.get("markets", [])
     if not markets:
         return None
@@ -292,7 +280,7 @@ def build_strategy_table(sname, scfg, data_dir):
     ncols = 3 + (4 if has_live else 0) + (4 if has_paper else 0)
     empty_row = [""] * ncols
 
-    def _wl(w, l):
+    def _wl(w: int, l: int) -> str:
         return f"{w}W/{l}L" if w + l > 0 else "—"
 
     for m in sorted_m:
@@ -374,7 +362,7 @@ def build_strategy_table(sname, scfg, data_dir):
     return table
 
 
-def _build_state_from_api(data_dir):
+def _build_state_from_api(data_dir: str) -> dict:
     """Try to get state from running bot's API, fall back to SQLite-only."""
     from timba.client import BotClient
     try:
@@ -404,7 +392,7 @@ def _build_state_from_api(data_dir):
     return state
 
 
-def run(data_dir, config_path, bot_env, check_mode=False):
+def run(data_dir: str, config_path: str | None, bot_env: str, check_mode: bool = False) -> None:
     state = _build_state_from_api(data_dir)
 
     if check_mode:

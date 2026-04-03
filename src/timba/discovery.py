@@ -6,11 +6,14 @@ tracked in MarketCache for continuous CLOB polling.
 """
 
 import logging
+import queue
 import time
+import typing
 
 from timba import market as market_mod
 from timba.base import MarketPosition
-from timba.config import INTERVAL_SECS, Config
+from timba.config import Config
+from timba.constants import INTERVAL_SECS
 from timba.market import MarketSeries, UpDownMarket
 from timba.market_cache import MarketCache
 from timba.strategies import Strategy
@@ -18,7 +21,11 @@ from timba.strategies import Strategy
 logger = logging.getLogger(__name__)
 
 class DiscoveryWorker:
-    """Background thread that discovers new markets and registers positions."""
+    """Background thread that discovers new markets and registers positions.
+
+    Thread safety: never writes to positions directly. All inserts are
+    queued as mutations for the main loop to apply via _drain_mutations().
+    """
 
     def __init__(
         self,
@@ -28,29 +35,32 @@ class DiscoveryWorker:
         strategies: dict[str, Strategy],
         strategy_configs: dict[str, tuple],
         market_cache: MarketCache,
+        mutations: queue.Queue,
         data_dir: str,
-    ):
+    ) -> None:
         self._config = config
         self._positions = positions
         self._seen_slugs = seen_slugs
         self._strategies = strategies
         self._strategy_configs = strategy_configs
         self._market_cache = market_cache
+        self._mutations = mutations
         self._data_dir = data_dir
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def discover_and_register(self):
+    def discover_and_register(self) -> None:
         """Discover markets and register positions for all enabled strategies."""
         series_list = self._build_series_list()
 
-        # Collect all slugs we already know about to skip redundant HTTP calls
+        # Collect all slugs we already know about to skip redundant HTTP calls.
+        # Snapshot keys — positions/seen_slugs are written by the main loop.
         known_slugs = set()
         for name in self._strategies:
-            known_slugs.update(self._positions[name].keys())
-            known_slugs.update(self._seen_slugs[name])
+            known_slugs.update(list(self._positions[name].keys()))
+            known_slugs.update(list(self._seen_slugs[name].keys()))
 
         markets = market_mod.discover_active_markets(series_list, known_slugs=known_slugs)
 
@@ -76,7 +86,7 @@ class DiscoveryWorker:
         total_pos = sum(len(p) for p in self._positions.values())
         logger.debug("Discovery | %d markets | %d positions", len(markets), total_pos)
 
-    def run_loop(self, is_running):
+    def run_loop(self, is_running: typing.Callable[[], bool]) -> None:
         """Background thread entry point. Call from threading.Thread(target=...)."""
         logger.info("Discovery thread started")
         while is_running():
@@ -104,13 +114,13 @@ class DiscoveryWorker:
 
     def _register_for_strategy(
         self, name: str, strat: Strategy, mkt: UpDownMarket,
-    ):
+    ) -> None:
         """Register a market for one strategy if configured and not seen."""
         positions = self._positions[name]
-        seen = self._seen_slugs[name]
         slug = mkt.slug
 
-        if slug in positions or slug in seen:
+        # Snapshot seen keys — main loop may mutate the dict concurrently
+        if slug in positions or slug in list(self._seen_slugs[name].keys()):
             return
 
         gcfg, markets_list = self._strategy_configs[name]
@@ -144,7 +154,7 @@ class DiscoveryWorker:
         else:
             pos._skip_first_window = False
 
-        positions[slug] = pos
+        self._mutations.put(lambda n=name, s=slug, p=pos: self._positions[n].__setitem__(s, p))
 
         logger.debug(
             "Register %s/%s | %s %s %s",

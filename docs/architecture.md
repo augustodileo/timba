@@ -10,7 +10,7 @@ timba start          -->  Bot process (HTTP API on :8080)
 
 timba status         -->  BotClient reads bot.json, calls GET /api/status
 timba stop           -->  BotClient reads bot.json, calls POST /api/stop
-timba logs           -->  BotClient reads bot.json, calls GET /api/logs
+timba monitor        -->  BotClient polls GET /api/status + /api/trades
 ```
 
 The bot writes `~/.timba/bot.json` on startup (PID + port). The CLI auto-discovers the bot from this file. On shutdown, `bot.json` is removed.
@@ -19,12 +19,12 @@ The bot writes `~/.timba/bot.json` on startup (PID + port). The CLI auto-discove
 
 ```
 Main loop (every 1s) -- ONLY evaluation + bet decisions:
-  1. Cleanup stale positions (markets ended 5+ min ago)
-  2. Read tick data from _recorded_ticks (in-memory, same data as SQLite)
-  3. strategy.evaluate(pos, tick) -> BetDecision
-  4. Write EV to SQLite (non-blocking queue)
-  5. If should_bet -> spawn order thread
-  6. Drain mutation queue (update in-memory State, write trades to SQLite)
+  1. Drain mutation queue (apply new positions, state updates, trade records)
+  2. Cleanup stale positions (markets ended 5+ min ago)
+  3. Read tick data from _recorded_ticks (in-memory, same data as SQLite)
+  4. strategy.evaluate(pos, tick) -> BetDecision
+  5. Write EV to SQLite (non-blocking queue)
+  6. If should_bet -> spawn order thread
 
 Background threads:
   MarketCache     -- continuous CLOB polling (midpoints, fills, tick_size)
@@ -56,8 +56,9 @@ See [API Reference](api.md) for full endpoint documentation.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/health` | GET | Liveness check (status, uptime) |
-| `/api/status` | GET | Health + full state + version |
+| `/api/health` | GET | Liveness check (status, uptime, feed) |
+| `/api/ready` | GET | Readiness check (200 if ready, 503 if not) |
+| `/api/status` | GET | Full dashboard: health + state + strategies + version |
 | `/api/trades` | GET | Recent trades from SQLite |
 | `/api/logs` | GET | Recent log lines from bot.log |
 | `/api/stop` | POST | Graceful shutdown |
