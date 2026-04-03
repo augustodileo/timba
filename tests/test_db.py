@@ -341,15 +341,18 @@ class TestFlushNotInitialized:
 
 class TestResetCloseErrors:
     def test_reset_closes_read_connections_with_errors(self, tmp_path):
-        """reset() should suppress errors when closing read connections (lines 193-194)."""
+        """reset() should suppress errors when closing read connections."""
         from unittest.mock import MagicMock
         db.init(tmp_path)
-        # Force a read connection to exist
-        _ = db.load_ticks()
-        # Replace real connections with mock that raises on close
-        mock_conn = MagicMock()
-        mock_conn.close.side_effect = Exception("close failed")
-        db._read_local.connections = {"fake": mock_conn}
+        _ = db.load_ticks()  # create a real read connection
+        # Close real connection, replace with mock that raises
+        with db._read_conn_lock:
+            for c in db._read_connections.values():
+                c.close()
+            db._read_connections.clear()
+            mock_conn = MagicMock()
+            mock_conn.close.side_effect = Exception("close failed")
+            db._read_connections[0] = mock_conn
         db.reset()  # should not raise despite close failure
         mock_conn.close.assert_called_once()
 
@@ -424,17 +427,19 @@ class TestRotateWalShm:
         assert len(main_renames) == 1
 
     def test_rotate_handles_read_conn_close_error(self, tmp_path):
-        """rotate() suppresses errors when closing stale read connections (lines 246-249)."""
+        """rotate() suppresses errors when closing read connections."""
         from unittest.mock import MagicMock
         db.init(tmp_path)
-        _ = db.load_ticks()  # create a read connection
-        # Close real connections first (Windows can't rename open files)
-        for conn in db._read_local.connections.values():
-            conn.close()
-        # Replace with mock that raises on close
-        mock_conn = MagicMock()
-        mock_conn.close.side_effect = Exception("close failed")
-        db._read_local.connections = {"fake": mock_conn}
+        _ = db.load_ticks()  # create a real read connection
+        # Close real connections so they don't hold the file
+        with db._read_conn_lock:
+            for c in db._read_connections.values():
+                c.close()
+            db._read_connections.clear()
+            # Add a mock that raises on close — rotate() should suppress it
+            mock_conn = MagicMock()
+            mock_conn.close.side_effect = Exception("close failed")
+            db._read_connections[0] = mock_conn
         archive = db.rotate("test")
         assert archive is not None
         mock_conn.close.assert_called_once()
@@ -691,34 +696,30 @@ class TestReadConnectionInvalidation:
         db._db_version = old_version
 
     def test_stale_conn_close_error_suppressed(self, tmp_path):
-        """Exception during stale connection close is suppressed (lines 466-467)."""
+        """Exception during stale connection close is suppressed."""
         from unittest.mock import MagicMock
         db.init(tmp_path)
-        # Create a read connection
-        _ = db.load_ticks()
+        _ = db.load_ticks()  # create a real read connection
 
-        # Replace with mock that raises on close
+        # Replace thread-local conn with mock that raises on close
         mock_conn = MagicMock()
         mock_conn.close.side_effect = Exception("close failed")
-        db._read_local.connections = {"fake": mock_conn}
+        db._read_local.conn = mock_conn
 
-        # Bump version to force invalidation
-        old_version = db._db_version
-        db._db_version = old_version + 1
+        # Bump version to force invalidation on next _get_read_connection()
+        db._db_version += 1
 
-        # This should try to close stale connections, hit the error, and continue
+        # This should try to close stale connection, hit the error, and continue
         ticks = db.load_ticks()
         assert isinstance(ticks, list)
         mock_conn.close.assert_called_once()
 
-        db._db_version = old_version
-
     def test_first_read_on_fresh_thread_local(self, tmp_path):
-        """First read with fresh _read_local exercises line 452."""
+        """First read with fresh _read_local exercises initial setup."""
         db.init(tmp_path)
         # Clear thread-local state to simulate a fresh thread
-        if hasattr(db._read_local, "connections"):
-            del db._read_local.connections
+        if hasattr(db._read_local, "conn"):
+            del db._read_local.conn
         if hasattr(db._read_local, "version"):
             del db._read_local.version
 

@@ -34,6 +34,10 @@ _rotation_done = threading.Event()    # writer confirms connection closed
 _rotation_lock = threading.Lock()
 _db_version = 0  # incremented on each rotation; read conns check this
 
+# Central registry of all read connections (for closing on rotation)
+_read_connections: dict[int, sqlite3.Connection] = {}  # thread_id → connection
+_read_conn_lock = threading.Lock()
+
 DB_FILENAME = "bot.db"
 DB_MAX_SIZE_MB = 500  # rotate if DB exceeds this
 
@@ -191,14 +195,17 @@ def reset() -> None:
             logger.warning("db writer thread did not stop cleanly")
     _write_queue = None
     _writer_thread = None
-    # Close any read connections on this thread
-    conns = getattr(_read_local, "connections", {})
-    for conn in conns.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _read_local.connections = {}
+    # Close all read connections (all threads)
+    with _read_conn_lock:
+        for c in _read_connections.values():
+            try:
+                c.close()
+            except Exception:
+                pass
+        _read_connections.clear()
+    if hasattr(_read_local, "conn"):
+        _read_local.conn = None
+        _read_local.version = -1
     _db_path = None
     _data_dir = None
     _db_version = 0
@@ -241,21 +248,27 @@ def rotate(reason: str = "scheduled") -> Path | None:
         if _write_queue is not None:
             _write_queue.join()
 
-        # 2. Close all connections before renaming (required on Windows)
+        # 2. Close writer connection before renaming (required on Windows)
         _rotation_done.clear()
         _rotation_event.set()  # signal writer to close
         _rotation_done.wait(timeout=5)  # wait for writer to confirm
 
-        # Close read connections on this thread
-        conns = getattr(_read_local, "connections", {})
-        for c in conns.values():
-            try:
-                c.close()
-            except Exception:
-                pass
-        _read_local.connections = {}
+        # 3. Close ALL read connections (from all threads) under lock
+        with _read_conn_lock:
+            for tid, c in list(_read_connections.items()):
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            _read_connections.clear()
+        # Bump version so threads reopen on next access
+        _db_version += 1
+        # Clear this thread's local cache
+        if hasattr(_read_local, "conn"):
+            _read_local.conn = None
+            _read_local.version = -1
 
-        # 3. Rename current DB (+ WAL/SHM files) — safe now, all connections closed
+        # 4. Rename current DB (+ WAL/SHM files) — all connections closed
         old_path.rename(archive_path)
         for suffix in ("-wal", "-shm"):
             src = old_path.parent / (old_path.name + suffix)
@@ -263,7 +276,7 @@ def rotate(reason: str = "scheduled") -> Path | None:
                 dst = archive_path.parent / (archive_path.name + suffix)
                 src.rename(dst)
 
-        # 4. Create fresh bot.db with schema
+        # 5. Create fresh bot.db with schema
         new_path = _data_dir / DB_FILENAME
         _db_path = new_path
         conn = sqlite3.connect(str(_db_path), timeout=10)
@@ -274,9 +287,8 @@ def rotate(reason: str = "scheduled") -> Path | None:
         conn.commit()
         conn.close()
 
-        # 5. Invalidate read connection caches + let writer reopen
-        _db_version += 1
-        _rotation_event.clear()  # writer sees this and reopens connection
+        # 6. Let writer reopen connection to new DB
+        _rotation_event.clear()
 
         logger.info("DB rotated: %s -> %s (%s)", DB_FILENAME, archive_name, reason)
         return archive_path
@@ -453,35 +465,39 @@ def _get_read_connection() -> sqlite3.Connection:
     """Return a thread-local read connection. Invalidates on DB rotation."""
     if _db_path is None:
         raise RuntimeError("db.init() must be called before any database operation")
-    if not hasattr(_read_local, "connections"):
-        _read_local.connections = {}
     if not hasattr(_read_local, "version"):
         _read_local.version = -1
+        _read_local.conn = None
 
     # Read version and path atomically — rotation could change both
     with _rotation_lock:
         current_version = _db_version
         current_path = _db_path
 
-    # If DB was rotated, close stale connections and reopen
+    # If DB was rotated, close stale connection and reopen
     if _read_local.version != current_version:
-        for conn in _read_local.connections.values():
+        if _read_local.conn is not None:
+            tid = threading.get_ident()
+            with _read_conn_lock:
+                _read_connections.pop(tid, None)
             try:
-                conn.close()
+                _read_local.conn.close()
             except Exception:
                 pass
-        _read_local.connections = {}
+            _read_local.conn = None
         _read_local.version = current_version
 
-    key = str(current_path)
-    conn = _read_local.connections.get(key)
-    if conn is None:
-        conn = sqlite3.connect(key, timeout=10)
+    if _read_local.conn is None:
+        conn = sqlite3.connect(str(current_path), timeout=10)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA query_only=ON")
         conn.row_factory = sqlite3.Row
-        _read_local.connections[key] = conn
-    return conn
+        _read_local.conn = conn
+        # Register centrally so rotate() can close all
+        with _read_conn_lock:
+            _read_connections[threading.get_ident()] = conn
+
+    return _read_local.conn
 
 
 # ── ID seeding ──────────────────────────────────────────────────────
