@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import sys
 import threading
 import time
 
@@ -498,6 +499,7 @@ class TestAPIServer:
         finally:
             server.shutdown()
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="chmod 0o000 doesn't restrict reads on Windows")
     def test_logs_endpoint_read_error(self, tmp_path):
         """If log file read fails, return empty lines (lines 121-122)."""
         import os

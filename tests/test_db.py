@@ -428,7 +428,10 @@ class TestRotateWalShm:
         from unittest.mock import MagicMock
         db.init(tmp_path)
         _ = db.load_ticks()  # create a read connection
-        # Replace real connections with mock that raises on close
+        # Close real connections first (Windows can't rename open files)
+        for conn in db._read_local.connections.values():
+            conn.close()
+        # Replace with mock that raises on close
         mock_conn = MagicMock()
         mock_conn.close.side_effect = Exception("close failed")
         db._read_local.connections = {"fake": mock_conn}
