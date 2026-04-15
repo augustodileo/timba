@@ -14,7 +14,7 @@ dependencies = [
     "pyyaml>=6.0,<7",
     "requests>=2.33,<3",
     "pyfiglet>=1.0,<2",
-    "rich>=14.0,<15",
+    "rich>=14.0,<16",
     "tzdata>=2024.1; sys_platform == 'win32'",
     "web3>=7.0,<8",
 ]
