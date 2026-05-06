@@ -7,7 +7,7 @@ license = {text = "MIT"}
 authors = [{name = "Augusto Di Leo"}]
 urls = {Homepage = "https://github.com/augustodileo/timba", Repository = "https://github.com/augustodileo/timba", Issues = "https://github.com/augustodileo/timba/issues"}
 dependencies = [
-    "polymarket-apis>=0.5.3,<0.6",
+    "polymarket-apis>=0.5.3,<2.2",
     "py-builder-relayer-client>=0.0.1,<0.1",
     "py-builder-signing-sdk>=0.0.2,<0.1",
     "jsonschema>=4.20,<5",
